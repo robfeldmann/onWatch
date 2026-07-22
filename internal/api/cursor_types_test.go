@@ -558,6 +558,10 @@ func TestToCursorSnapshot_Credits(t *testing.T) {
 func TestToCursorSnapshot_Enterprise(t *testing.T) {
 	usage := &CursorUsageResponse{
 		Enabled: true,
+		SpendLimitUsage: &CursorSpendLimitUsage{
+			IndividualLimit:     25000,
+			IndividualRemaining: 24984,
+		},
 	}
 
 	planInfo := &CursorPlanInfoResponse{
@@ -596,6 +600,24 @@ func TestToCursorSnapshot_Enterprise(t *testing.T) {
 	}
 	if !requestsFound {
 		t.Error("requests quota not found for enterprise")
+	}
+	onDemandFound := false
+	for _, q := range snapshot.Quotas {
+		if q.Name == "on_demand" {
+			onDemandFound = true
+			if q.Format != CursorFormatDollars {
+				t.Errorf("on_demand Format = %q, want %q", q.Format, CursorFormatDollars)
+			}
+			if q.Used != 0.16 {
+				t.Errorf("on_demand Used = %f, want 0.16", q.Used)
+			}
+			if q.Limit != 250 {
+				t.Errorf("on_demand Limit = %f, want 250", q.Limit)
+			}
+		}
+	}
+	if !onDemandFound {
+		t.Error("on_demand quota not found for enterprise")
 	}
 }
 
