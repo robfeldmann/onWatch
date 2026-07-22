@@ -312,6 +312,15 @@ func TestShouldFetchCursorRequestBasedUsage(t *testing.T) {
 			want:           true,
 		},
 		{
+			name: "disabled enterprise account attempts request-based usage",
+			usage: &CursorUsageResponse{
+				Enabled:   false,
+				PlanUsage: nil,
+			},
+			normalizedPlan: "enterprise",
+			want:           true,
+		},
+		{
 			name: "standard usage skips request-based endpoint",
 			usage: &CursorUsageResponse{
 				Enabled:   true,
@@ -347,5 +356,8 @@ func TestShouldUseCursorRequestBasedUsage(t *testing.T) {
 	}
 	if shouldUseCursorRequestBasedUsage(&CursorUsageResponse{Enabled: true, PlanUsage: &CursorPlanUsage{Limit: 100}}, requestUsage) {
 		t.Fatal("did not expect request-based usage when a standard plan limit is available")
+	}
+	if !shouldUseCursorRequestBasedUsage(&CursorUsageResponse{Enabled: false, PlanUsage: nil}, requestUsage) {
+		t.Fatal("expected request-based usage for a disabled enterprise usage response")
 	}
 }
