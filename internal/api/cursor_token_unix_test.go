@@ -42,3 +42,36 @@ func TestWriteCursorCredentials_FailsWhenRefreshTokenIsNotPersisted(t *testing.T
 		t.Fatal("expected writeCursorCredentials to fail when refresh token persistence fails")
 	}
 }
+
+func TestReadCursorKeychainValue_FallsBackToCursorAgentAccount(t *testing.T) {
+	origRead := cursorReadKeychainPassword
+	var calls []string
+	cursorReadKeychainPassword = func(service, account string) (string, error) {
+		calls = append(calls, service+":"+account)
+		if account == "cursor-user" {
+			return "cursor_agent_token", nil
+		}
+		return "", errors.New("not found")
+	}
+	t.Cleanup(func() {
+		cursorReadKeychainPassword = origRead
+	})
+
+	got := readCursorKeychainValue("cursor-access-token", "rob")
+	if got != "cursor_agent_token" {
+		t.Fatalf("readCursorKeychainValue() = %q, want Cursor Agent token", got)
+	}
+
+	wantCalls := []string{
+		"cursor-access-token:rob",
+		"cursor-access-token:cursor-user",
+	}
+	if len(calls) != len(wantCalls) {
+		t.Fatalf("keychain lookup calls = %v, want %v", calls, wantCalls)
+	}
+	for i := range wantCalls {
+		if calls[i] != wantCalls[i] {
+			t.Errorf("keychain lookup call %d = %q, want %q", i, calls[i], wantCalls[i])
+		}
+	}
+}
