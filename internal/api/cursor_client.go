@@ -194,7 +194,7 @@ func (c *CursorClient) resolvePlanName(planInfo *CursorPlanInfoResponse, fetchFa
 }
 
 func shouldFetchCursorRequestBasedUsage(usage *CursorUsageResponse, normalizedPlan string) bool {
-	if usage == nil || !usage.Enabled {
+	if usage == nil {
 		return false
 	}
 
@@ -208,7 +208,7 @@ func shouldFetchCursorRequestBasedUsage(usage *CursorUsageResponse, normalizedPl
 }
 
 func shouldUseCursorRequestBasedUsage(usage *CursorUsageResponse, requestUsage *CursorRequestUsageResponse) bool {
-	if usage == nil || !usage.Enabled || requestUsage == nil || len(requestUsage.Models) == 0 {
+	if usage == nil || requestUsage == nil || len(requestUsage.Models) == 0 {
 		return false
 	}
 

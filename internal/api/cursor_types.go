@@ -676,7 +676,7 @@ func ToCursorSnapshot(
 	snapshot.AccountType = accountType
 	snapshot.PlanName = planName
 
-	if accountType == CursorAccountEnterprise && requestUsage != nil {
+	if accountType == CursorAccountEnterprise && useRequestBased {
 		snapshot.Quotas = buildEnterpriseQuotas(usage, requestUsage)
 	} else {
 		snapshot.Quotas = buildStandardQuotas(usage, creditGrants, stripeResp, accountType)
@@ -822,27 +822,7 @@ func buildStandardQuotas(
 		}
 	}
 
-	if usage.SpendLimitUsage != nil {
-		su := usage.SpendLimitUsage
-		limit := su.IndividualLimit
-		remaining := su.IndividualRemaining
-		bad := su.badIndividualLimit
-		if limit == 0 && su.PooledLimit > 0 {
-			limit = su.PooledLimit
-			remaining = su.PooledRemaining
-			bad = su.badPooledLimit
-		}
-		if limit > 0 && !bad {
-			used := limit - remaining
-			quotas = append(quotas, CursorQuota{
-				Name:        "on_demand",
-				Used:        float64(used) / 100,
-				Limit:       float64(limit) / 100,
-				Utilization: float64(used) / float64(limit) * 100,
-				Format:      CursorFormatDollars,
-			})
-		}
-	}
+	quotas = appendCursorOnDemandQuota(quotas, usage)
 
 	return quotas
 }
@@ -891,5 +871,35 @@ func buildEnterpriseQuotas(usage *CursorUsageResponse, requestUsage *CursorReque
 		})
 	}
 
-	return quotas
+	return appendCursorOnDemandQuota(quotas, usage)
+}
+
+func appendCursorOnDemandQuota(quotas []CursorQuota, usage *CursorUsageResponse) []CursorQuota {
+	if usage == nil || usage.SpendLimitUsage == nil {
+		return quotas
+	}
+
+	su := usage.SpendLimitUsage
+	limit := su.IndividualLimit
+	remaining := su.IndividualRemaining
+	bad := su.badIndividualLimit
+	if limit == 0 && su.PooledLimit > 0 {
+		limit = su.PooledLimit
+		remaining = su.PooledRemaining
+		bad = su.badPooledLimit
+	}
+	// A limit that failed to parse is dropped rather than stored with a
+	// fabricated zero, so the last good on_demand card stays.
+	if limit <= 0 || bad {
+		return quotas
+	}
+
+	used := limit - remaining
+	return append(quotas, CursorQuota{
+		Name:        "on_demand",
+		Used:        float64(used) / 100,
+		Limit:       float64(limit) / 100,
+		Utilization: float64(used) / float64(limit) * 100,
+		Format:      CursorFormatDollars,
+	})
 }
