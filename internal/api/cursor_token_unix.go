@@ -14,9 +14,19 @@ import (
 )
 
 var (
-	cursorWriteSQLiteToken  = WriteCursorTokenToSQLite
-	cursorWriteKeychain     = writeCursorTokenToKeychain
-	cursorWriteLinuxKeyring = writeCursorTokenToLinuxKeyring
+	cursorWriteSQLiteToken     = WriteCursorTokenToSQLite
+	cursorWriteKeychain        = writeCursorTokenToKeychain
+	cursorWriteLinuxKeyring    = writeCursorTokenToLinuxKeyring
+	cursorReadKeychainPassword = func(service, account string) (string, error) {
+		out, err := exec.Command("security", "find-generic-password",
+			"-s", service,
+			"-a", account,
+			"-w").Output()
+		if err != nil {
+			return "", err
+		}
+		return strings.TrimSpace(string(out)), nil
+	}
 )
 
 func getCursorStateDBPath() string {
@@ -85,21 +95,8 @@ func readCursorKeychainAuth(logger *slog.Logger) (accessToken, refreshToken stri
 			return
 		}
 
-		out, err := exec.Command("security", "find-generic-password",
-			"-s", "cursor-access-token",
-			"-a", username,
-			"-w").Output()
-		if err == nil {
-			accessToken = strings.TrimSpace(string(out))
-		}
-
-		out, err = exec.Command("security", "find-generic-password",
-			"-s", "cursor-refresh-token",
-			"-a", username,
-			"-w").Output()
-		if err == nil {
-			refreshToken = strings.TrimSpace(string(out))
-		}
+		accessToken = readCursorKeychainValue("cursor-access-token", username)
+		refreshToken = readCursorKeychainValue("cursor-refresh-token", username)
 
 		if accessToken != "" || refreshToken != "" {
 			logger.Info("cursor: auth detected from macOS Keychain")
@@ -127,6 +124,24 @@ func readCursorKeychainAuth(logger *slog.Logger) (accessToken, refreshToken stri
 	}
 
 	return
+}
+
+func readCursorKeychainValue(service, username string) string {
+	for _, account := range cursorKeychainAccounts(username) {
+		value, err := cursorReadKeychainPassword(service, account)
+		if err == nil && value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func cursorKeychainAccounts(username string) []string {
+	accounts := []string{username}
+	if username != "cursor-user" {
+		accounts = append(accounts, "cursor-user")
+	}
+	return accounts
 }
 
 func writeCursorCredentials(accessToken, refreshToken string) error {
