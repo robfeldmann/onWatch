@@ -373,13 +373,21 @@ func cursorTestToken(subject string) string {
 	return "eyJhbGciOiJub25lIn0." + payload + "."
 }
 
+// cursorTeamServerConfig tunes the failure the server injects. Zero status means 200.
+type cursorTeamServerConfig struct {
+	hardLimitBody   string
+	hardLimitStatus int
+	stripeStatus    int
+	calls           map[string]int
+}
+
 // cursorTeamServer answers the surfaces a team seat needs. The usage and legacy request
 // payloads are the real structural zeros an ORG_TOKEN_BASED_CONTRACT seat receives.
-func cursorTeamServer(t *testing.T, hardLimitBody string, hardLimitStatus int, calls map[string]int) *httptest.Server {
+func cursorTeamServer(t *testing.T, cfg cursorTeamServerConfig) *httptest.Server {
 	t.Helper()
 
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls[r.URL.Path]++
+		cfg.calls[r.URL.Path]++
 		w.Header().Set("Content-Type", "application/json")
 
 		switch r.URL.Path {
@@ -403,12 +411,16 @@ func cursorTeamServer(t *testing.T, hardLimitBody string, hardLimitStatus int, c
 			if req.TeamID != 987654 {
 				t.Errorf("GetHardLimit teamId = %d, want 987654 (without it the per-user cap is omitted)", req.TeamID)
 			}
-			if hardLimitStatus != http.StatusOK {
-				w.WriteHeader(hardLimitStatus)
+			if cfg.hardLimitStatus != 0 && cfg.hardLimitStatus != http.StatusOK {
+				w.WriteHeader(cfg.hardLimitStatus)
 				return
 			}
-			w.Write([]byte(hardLimitBody))
+			w.Write([]byte(cfg.hardLimitBody))
 		case "/api/auth/stripe":
+			if cfg.stripeStatus != 0 && cfg.stripeStatus != http.StatusOK {
+				w.WriteHeader(cfg.stripeStatus)
+				return
+			}
 			w.Write([]byte(`{"membershipType":"enterprise","isTeamMember":true,"teamId":987654,"teamMembershipType":"ORG_TOKEN_BASED_CONTRACT","customerBalance":0}`))
 		case "/api/usage":
 			w.Write([]byte(`{"gpt-4":{"numRequests":0,"numRequestsTotal":0,"numTokens":0,"maxTokenUsage":null,"maxRequestUsage":null},"startOfMonth":"2026-07-01T00:00:00.000Z"}`))
@@ -420,7 +432,10 @@ func cursorTeamServer(t *testing.T, hardLimitBody string, hardLimitStatus int, c
 
 func TestCursorClient_FetchQuotas_TeamContract(t *testing.T) {
 	calls := map[string]int{}
-	server := cursorTeamServer(t, `{"hardLimit":25000,"hardLimitPerUser":150,"perUserMonthlyLimitDollars":200}`, http.StatusOK, calls)
+	server := cursorTeamServer(t, cursorTeamServerConfig{
+		hardLimitBody: `{"hardLimit":25000,"hardLimitPerUser":150,"perUserMonthlyLimitDollars":200}`,
+		calls:         calls,
+	})
 	defer server.Close()
 
 	originalWebBase := cursorWebBaseURL
@@ -466,7 +481,7 @@ func TestCursorClient_FetchQuotas_TeamContract(t *testing.T) {
 
 func TestCursorClient_FetchQuotas_TeamContractHardLimitFailure(t *testing.T) {
 	calls := map[string]int{}
-	server := cursorTeamServer(t, "", http.StatusInternalServerError, calls)
+	server := cursorTeamServer(t, cursorTeamServerConfig{hardLimitStatus: http.StatusInternalServerError, calls: calls})
 	defer server.Close()
 
 	originalWebBase := cursorWebBaseURL
@@ -485,7 +500,7 @@ func TestCursorClient_FetchQuotas_TeamContractHardLimitFailure(t *testing.T) {
 
 func TestCursorClient_FetchQuotas_TeamContractWithoutPerUserLimit(t *testing.T) {
 	calls := map[string]int{}
-	server := cursorTeamServer(t, `{"hardLimit":30000}`, http.StatusOK, calls)
+	server := cursorTeamServer(t, cursorTeamServerConfig{hardLimitBody: `{"hardLimit":30000}`, calls: calls})
 	defer server.Close()
 
 	originalWebBase := cursorWebBaseURL
@@ -495,6 +510,29 @@ func TestCursorClient_FetchQuotas_TeamContractWithoutPerUserLimit(t *testing.T) 
 	client := NewCursorClient(cursorTestToken("user_01TEAMSEAT"), slog.Default(), WithCursorBaseURL(server.URL))
 	if _, err := client.FetchQuotas(context.Background()); err == nil {
 		t.Fatal("FetchQuotas succeeded without a per-user cap, want error rather than a fabricated quota")
+	}
+}
+
+func TestCursorClient_FetchQuotas_StripeFailureRefusesPerUserCounters(t *testing.T) {
+	calls := map[string]int{}
+	server := cursorTeamServer(t, cursorTeamServerConfig{
+		hardLimitBody: `{"hardLimit":25000,"hardLimitPerUser":150,"perUserMonthlyLimitDollars":200}`,
+		stripeStatus:  http.StatusInternalServerError,
+		calls:         calls,
+	})
+	defer server.Close()
+
+	originalWebBase := cursorWebBaseURL
+	cursorWebBaseURL = server.URL
+	defer func() { cursorWebBaseURL = originalWebBase }()
+
+	client := NewCursorClient(cursorTestToken("user_01TEAMSEAT"), slog.Default(), WithCursorBaseURL(server.URL))
+	snapshot, err := client.FetchQuotas(context.Background())
+	if err == nil {
+		t.Fatalf("FetchQuotas succeeded with quotas %+v; unresolved membership must not publish per-user counters", snapshot.Quotas)
+	}
+	if calls["/api/usage"] != 0 {
+		t.Errorf("legacy per-user usage endpoint called %d times despite unresolved membership", calls["/api/usage"])
 	}
 }
 
