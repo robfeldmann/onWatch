@@ -98,6 +98,33 @@ type CursorStripeResponse struct {
 	MembershipType     string `json:"membershipType"`
 	SubscriptionStatus string `json:"subscriptionStatus"`
 	CustomerBalance    int    `json:"customerBalance"`
+	IsTeamMember       bool   `json:"isTeamMember"`
+	TeamID             int64  `json:"teamId"`
+	TeamMembershipType string `json:"teamMembershipType"`
+}
+
+// CursorAggregatedUsageResponse is GetAggregatedUsageEvents. On a team seat this is the
+// only surface that sees the money: spend accrues against the org contract, so
+// GetCurrentPeriodUsage reports an empty billing cycle and the legacy per-user request
+// counter is structurally zero. TotalCostCents is fractional cents, not minor units.
+type CursorAggregatedUsageResponse struct {
+	TotalCostCents float64 `json:"totalCostCents"`
+}
+
+// CursorHardLimitResponse is GetHardLimit. HardLimit and HardLimitPerUser are org-wide
+// contract figures in mixed units; only PerUserMonthlyLimitDollars matches the seat cap
+// the Cursor dashboard shows, and it is absent unless the request carries teamId.
+type CursorHardLimitResponse struct {
+	HardLimit                  int `json:"hardLimit"`
+	HardLimitPerUser           int `json:"hardLimitPerUser"`
+	PerUserMonthlyLimitDollars int `json:"perUserMonthlyLimitDollars"`
+}
+
+// CursorTeamContract pairs the two team-seat responses that must agree for a spend
+// quota to be meaningful.
+type CursorTeamContract struct {
+	Aggregated *CursorAggregatedUsageResponse
+	HardLimit  *CursorHardLimitResponse
 }
 
 type CursorOAuthResponse struct {
@@ -158,6 +185,22 @@ func ParseCursorCreditGrantsResponse(data []byte) (*CursorCreditGrantsResponse, 
 
 func ParseCursorStripeResponse(data []byte) (*CursorStripeResponse, error) {
 	var resp CursorStripeResponse
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func ParseCursorAggregatedUsageResponse(data []byte) (*CursorAggregatedUsageResponse, error) {
+	var resp CursorAggregatedUsageResponse
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func ParseCursorHardLimitResponse(data []byte) (*CursorHardLimitResponse, error) {
+	var resp CursorHardLimitResponse
 	if err := json.Unmarshal(data, &resp); err != nil {
 		return nil, err
 	}
@@ -300,6 +343,7 @@ func ToCursorSnapshot(
 	stripeResp *CursorStripeResponse,
 	requestUsage *CursorRequestUsageResponse,
 	useRequestBased bool,
+	teamContract *CursorTeamContract,
 ) *CursorSnapshot {
 	snapshot := &CursorSnapshot{
 		CapturedAt: time.Now().UTC(),
@@ -313,9 +357,12 @@ func ToCursorSnapshot(
 	snapshot.AccountType = accountType
 	snapshot.PlanName = planName
 
-	if accountType == CursorAccountEnterprise && useRequestBased {
+	switch teamQuotas := buildTeamContractQuotas(teamContract, planInfo); {
+	case len(teamQuotas) > 0:
+		snapshot.Quotas = teamQuotas
+	case accountType == CursorAccountEnterprise && useRequestBased:
 		snapshot.Quotas = buildEnterpriseQuotas(usage, requestUsage)
-	} else {
+	default:
 		snapshot.Quotas = buildStandardQuotas(usage, creditGrants, stripeResp, accountType)
 	}
 
@@ -489,6 +536,38 @@ func buildEnterpriseQuotas(usage *CursorUsageResponse, requestUsage *CursorReque
 	}
 
 	return appendCursorOnDemandQuota(quotas, usage)
+}
+
+// buildTeamContractQuotas maps a team seat's month-to-date spend against its per-user
+// monthly cap. Returns nil unless both halves of the contract are present: without the
+// cap the spend has nothing to be a fraction of, and the caller falls back to the
+// per-user surfaces.
+func buildTeamContractQuotas(contract *CursorTeamContract, planInfo *CursorPlanInfoResponse) []CursorQuota {
+	if contract == nil || contract.Aggregated == nil || contract.HardLimit == nil {
+		return nil
+	}
+	limitDollars := float64(contract.HardLimit.PerUserMonthlyLimitDollars)
+	if limitDollars <= 0 {
+		return nil
+	}
+
+	usedDollars := contract.Aggregated.TotalCostCents / 100
+
+	var billingCycleEnd *time.Time
+	if planInfo != nil {
+		if t, err := ParseUnixMsString(planInfo.PlanInfo.BillingCycleEnd); err == nil && !t.IsZero() {
+			billingCycleEnd = &t
+		}
+	}
+
+	return []CursorQuota{{
+		Name:        "total_usage",
+		Used:        usedDollars,
+		Limit:       limitDollars,
+		Utilization: usedDollars / limitDollars * 100,
+		Format:      CursorFormatDollars,
+		ResetsAt:    billingCycleEnd,
+	}}
 }
 
 func appendCursorOnDemandQuota(quotas []CursorQuota, usage *CursorUsageResponse) []CursorQuota {

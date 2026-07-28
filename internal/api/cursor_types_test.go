@@ -362,7 +362,7 @@ func TestToCursorSnapshot_Individual(t *testing.T) {
 		},
 	}
 
-	snapshot := ToCursorSnapshot(usage, planInfo, nil, nil, nil, false)
+	snapshot := ToCursorSnapshot(usage, planInfo, nil, nil, nil, false, nil)
 
 	if snapshot.AccountType != CursorAccountIndividual {
 		t.Errorf("AccountType = %q, want %q", snapshot.AccountType, CursorAccountIndividual)
@@ -428,7 +428,7 @@ func TestToCursorSnapshot_IndividualIncludesZeroBreakdownQuotas(t *testing.T) {
 		},
 	}
 
-	snapshot := ToCursorSnapshot(usage, planInfo, nil, nil, nil, false)
+	snapshot := ToCursorSnapshot(usage, planInfo, nil, nil, nil, false, nil)
 
 	autoFound := false
 	apiFound := false
@@ -479,7 +479,7 @@ func TestToCursorSnapshot_Team(t *testing.T) {
 		},
 	}
 
-	snapshot := ToCursorSnapshot(usage, planInfo, nil, nil, nil, false)
+	snapshot := ToCursorSnapshot(usage, planInfo, nil, nil, nil, false, nil)
 
 	if snapshot.AccountType != CursorAccountTeam {
 		t.Errorf("AccountType = %q, want %q", snapshot.AccountType, CursorAccountTeam)
@@ -533,7 +533,7 @@ func TestToCursorSnapshot_Credits(t *testing.T) {
 		CustomerBalance: -2000,
 	}
 
-	snapshot := ToCursorSnapshot(usage, planInfo, creditGrants, stripeResp, nil, false)
+	snapshot := ToCursorSnapshot(usage, planInfo, creditGrants, stripeResp, nil, false, nil)
 
 	creditsFound := false
 	for _, q := range snapshot.Quotas {
@@ -577,7 +577,7 @@ func TestToCursorSnapshot_Enterprise(t *testing.T) {
 		},
 	}
 
-	snapshot := ToCursorSnapshot(usage, planInfo, nil, nil, requestUsage, true)
+	snapshot := ToCursorSnapshot(usage, planInfo, nil, nil, requestUsage, true, nil)
 
 	if snapshot.AccountType != CursorAccountEnterprise {
 		t.Errorf("AccountType = %q, want %q", snapshot.AccountType, CursorAccountEnterprise)
@@ -643,7 +643,7 @@ func TestToCursorSnapshot_OnDemand(t *testing.T) {
 		},
 	}
 
-	snapshot := ToCursorSnapshot(usage, planInfo, nil, nil, nil, false)
+	snapshot := ToCursorSnapshot(usage, planInfo, nil, nil, nil, false, nil)
 
 	ondemandFound := false
 	for _, q := range snapshot.Quotas {
@@ -666,7 +666,7 @@ func TestToCursorSnapshot_OnDemand(t *testing.T) {
 }
 
 func TestToCursorSnapshot_NilUsage(t *testing.T) {
-	snapshot := ToCursorSnapshot(nil, nil, nil, nil, nil, false)
+	snapshot := ToCursorSnapshot(nil, nil, nil, nil, nil, false, nil)
 
 	if snapshot.AccountType != CursorAccountIndividual {
 		t.Errorf("AccountType = %q, want %q", snapshot.AccountType, CursorAccountIndividual)
@@ -701,7 +701,7 @@ func TestToCursorSnapshot_TeamZeroLimitDoesNotProduceInfiniteUtilization(t *test
 		},
 	}
 
-	snapshot := ToCursorSnapshot(usage, planInfo, nil, nil, nil, false)
+	snapshot := ToCursorSnapshot(usage, planInfo, nil, nil, nil, false, nil)
 	if len(snapshot.Quotas) == 0 {
 		t.Fatal("expected at least one quota")
 	}
@@ -868,4 +868,57 @@ func createTestJWT(sub string, exp int64) string {
 func base64URLTestEncode(data []byte) string {
 	s := base64.URLEncoding.EncodeToString(data)
 	return strings.TrimRight(s, "=")
+}
+
+func TestBuildTeamContractQuotas(t *testing.T) {
+	contract := &CursorTeamContract{
+		Aggregated: &CursorAggregatedUsageResponse{TotalCostCents: 1234.567891},
+		HardLimit:  &CursorHardLimitResponse{HardLimit: 25000, HardLimitPerUser: 150, PerUserMonthlyLimitDollars: 200},
+	}
+	planInfo := &CursorPlanInfoResponse{PlanInfo: CursorPlanInfo{PlanName: "Enterprise", BillingCycleEnd: "1785542400000"}}
+
+	quotas := buildTeamContractQuotas(contract, planInfo)
+	if len(quotas) != 1 {
+		t.Fatalf("len(quotas) = %d, want 1", len(quotas))
+	}
+	if quotas[0].Limit != 200 {
+		t.Errorf("Limit = %v, want 200; hardLimit and hardLimitPerUser are org-wide figures in other units", quotas[0].Limit)
+	}
+	if quotas[0].ResetsAt == nil || quotas[0].ResetsAt.UTC().Format(time.RFC3339) != "2026-08-01T00:00:00Z" {
+		t.Errorf("ResetsAt = %v, want 2026-08-01T00:00:00Z", quotas[0].ResetsAt)
+	}
+
+	if got := buildTeamContractQuotas(nil, planInfo); got != nil {
+		t.Errorf("nil contract produced %+v, want nil", got)
+	}
+	noCap := &CursorTeamContract{
+		Aggregated: contract.Aggregated,
+		HardLimit:  &CursorHardLimitResponse{HardLimit: 30000},
+	}
+	if got := buildTeamContractQuotas(noCap, planInfo); got != nil {
+		t.Errorf("missing per-user cap produced %+v, want nil", got)
+	}
+
+	noPlanInfo := buildTeamContractQuotas(contract, nil)
+	if len(noPlanInfo) != 1 || noPlanInfo[0].ResetsAt != nil {
+		t.Errorf("missing plan info produced %+v, want one quota with no reset", noPlanInfo)
+	}
+}
+
+func TestToCursorSnapshot_TeamContractWinsOverRequestBased(t *testing.T) {
+	usage := &CursorUsageResponse{BillingCycleStart: "1785264303937", BillingCycleEnd: "1785264303937"}
+	planInfo := &CursorPlanInfoResponse{PlanInfo: CursorPlanInfo{PlanName: "Enterprise", BillingCycleEnd: "1785542400000"}}
+	requestUsage := &CursorRequestUsageResponse{Models: map[string]CursorModelUsage{"gpt-4": {}}}
+	contract := &CursorTeamContract{
+		Aggregated: &CursorAggregatedUsageResponse{TotalCostCents: 1234.567891},
+		HardLimit:  &CursorHardLimitResponse{PerUserMonthlyLimitDollars: 200},
+	}
+
+	snapshot := ToCursorSnapshot(usage, planInfo, nil, nil, requestUsage, true, contract)
+	if len(snapshot.Quotas) != 1 {
+		t.Fatalf("Quotas = %+v, want only the team spend quota", snapshot.Quotas)
+	}
+	if snapshot.Quotas[0].Name != "total_usage" || snapshot.Quotas[0].Format != CursorFormatDollars {
+		t.Errorf("Quotas[0] = %+v, want dollars-denominated total_usage", snapshot.Quotas[0])
+	}
 }
