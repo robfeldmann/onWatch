@@ -32,6 +32,10 @@ const (
 
 var cursorOAuthURL = "https://api2.cursor.sh/oauth/token"
 
+// cursorWebBaseURL hosts the cookie-authenticated surfaces (Stripe, per-user usage) that
+// do not live on the Connect RPC host. Overridden in tests.
+var cursorWebBaseURL = "https://cursor.com"
+
 type CursorClient struct {
 	httpClient *http.Client
 	token      string
@@ -114,8 +118,30 @@ func (c *CursorClient) FetchQuotas(ctx context.Context) (*CursorSnapshot, error)
 	}
 	normalizedPlan := NormalizeCursorPlanName(planName)
 
+	// The Stripe surface is the only place the seat's team membership is visible, and
+	// teamId is required to read the per-user cap, so it is fetched before any decision
+	// about which usage surface to trust.
+	var stripeResp *CursorStripeResponse
+	if sr, err := c.fetchStripeBalance(ctx, token); err != nil {
+		c.logger.Debug("cursor: failed to fetch Stripe balance", "error", err)
+	} else {
+		stripeResp = sr
+	}
+
+	var teamContract *CursorTeamContract
+	if cursorUsesTeamContract(usage, stripeResp) {
+		tc, err := c.fetchTeamContract(ctx, token, stripeResp.TeamID)
+		if err != nil {
+			// Falling through to the per-user surfaces would publish this seat's
+			// structural zero and overwrite the last good spend reading, so fail the
+			// poll and let the agent keep the previous snapshot.
+			return nil, fmt.Errorf("cursor: team contract: %w", err)
+		}
+		teamContract = tc
+	}
+
 	var requestUsage *CursorRequestUsageResponse
-	if shouldFetchCursorRequestBasedUsage(usage, normalizedPlan) {
+	if teamContract == nil && shouldFetchCursorRequestBasedUsage(usage, normalizedPlan) {
 		ru, err := c.fetchRequestBasedUsage(ctx, token)
 		if err != nil {
 			c.logger.Warn("cursor: failed to fetch request-based usage", "error", err)
@@ -126,26 +152,17 @@ func (c *CursorClient) FetchQuotas(ctx context.Context) (*CursorSnapshot, error)
 	useRequestBased := shouldUseCursorRequestBasedUsage(usage, requestUsage)
 
 	var creditGrants *CursorCreditGrantsResponse
-	var stripeResp *CursorStripeResponse
-
-	if !useRequestBased {
+	if teamContract == nil && !useRequestBased {
 		cg, err := c.fetchCreditGrants(ctx, token)
 		if err != nil {
 			c.logger.Debug("cursor: failed to fetch credit grants", "error", err)
 		} else {
 			creditGrants = cg
 		}
-
-		sr, err := c.fetchStripeBalance(ctx, token)
-		if err != nil {
-			c.logger.Debug("cursor: failed to fetch Stripe balance", "error", err)
-		} else {
-			stripeResp = sr
-		}
 	}
 
 	accountType := DetermineCursorAccountType(planName, usage, useRequestBased)
-	snapshot := ToCursorSnapshot(usage, planInfo, creditGrants, stripeResp, requestUsage, useRequestBased)
+	snapshot := ToCursorSnapshot(usage, planInfo, creditGrants, stripeResp, requestUsage, useRequestBased, teamContract)
 
 	c.logger.Debug("cursor: quotas fetched",
 		"account_type", accountType,
@@ -176,6 +193,67 @@ func shouldUseCursorRequestBasedUsage(usage *CursorUsageResponse, requestUsage *
 	}
 
 	return usage.PlanUsage == nil || usage.PlanUsage.Limit <= 0
+}
+
+// CursorOrgTokenContract is the teamMembershipType whose spend accrues against the org
+// contract instead of the seat.
+const CursorOrgTokenContract = "ORG_TOKEN_BASED_CONTRACT"
+
+// cursorUsesTeamContract reports whether this seat's spend accrues against a team
+// contract rather than against the seat itself. Such a seat gets an empty billing cycle
+// from GetCurrentPeriodUsage and a structurally zero legacy request counter, so both
+// per-user surfaces read as "no usage" however much was spent. Only the observed
+// ORG_TOKEN_BASED_CONTRACT shape is routed here; other team types keep the per-user
+// surfaces until one is shown to read zero the same way.
+func cursorUsesTeamContract(usage *CursorUsageResponse, stripeResp *CursorStripeResponse) bool {
+	if stripeResp == nil || !stripeResp.IsTeamMember || stripeResp.TeamID <= 0 {
+		return false
+	}
+	if stripeResp.TeamMembershipType != CursorOrgTokenContract {
+		return false
+	}
+	if usage != nil && usage.PlanUsage != nil && usage.PlanUsage.Limit > 0 {
+		return false
+	}
+	return true
+}
+
+// fetchTeamContract reads the two halves of a team seat's spend picture: month-to-date
+// spend and the per-user monthly cap. Either half missing makes the other unusable, and
+// the caller has no safe fallback for a team seat, so both are required.
+func (c *CursorClient) fetchTeamContract(ctx context.Context, token string, teamID int64) (*CursorTeamContract, error) {
+	aggregated, err := c.fetchAggregatedUsageEvents(ctx, token)
+	if err != nil {
+		return nil, fmt.Errorf("aggregated usage events: %w", err)
+	}
+
+	hardLimit, err := c.fetchHardLimit(ctx, token, teamID)
+	if err != nil {
+		return nil, fmt.Errorf("hard limit: %w", err)
+	}
+	if hardLimit.PerUserMonthlyLimitDollars <= 0 {
+		return nil, fmt.Errorf("%w: team %d reported no per-user monthly limit", ErrCursorInvalidResponse, teamID)
+	}
+
+	return &CursorTeamContract{Aggregated: aggregated, HardLimit: hardLimit}, nil
+}
+
+func (c *CursorClient) fetchAggregatedUsageEvents(ctx context.Context, token string) (*CursorAggregatedUsageResponse, error) {
+	body, err := c.connectPost(ctx, token, "/aiserver.v1.DashboardService/GetAggregatedUsageEvents", nil)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCursorAggregatedUsageResponse(body)
+}
+
+// fetchHardLimit must send teamId: without it the endpoint still answers 200, but with
+// only the org-wide hardLimit and no per-user cap.
+func (c *CursorClient) fetchHardLimit(ctx context.Context, token string, teamID int64) (*CursorHardLimitResponse, error) {
+	body, err := c.connectPost(ctx, token, "/aiserver.v1.DashboardService/GetHardLimit", map[string]int64{"teamId": teamID})
+	if err != nil {
+		return nil, err
+	}
+	return ParseCursorHardLimitResponse(body)
 }
 
 func (c *CursorClient) fetchCurrentPeriodUsage(ctx context.Context, token string) (*CursorUsageResponse, error) {
@@ -214,7 +292,7 @@ func (c *CursorClient) fetchStripeBalance(ctx context.Context, token string) (*C
 	reqCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, "https://cursor.com/api/auth/stripe", nil)
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, cursorWebBaseURL+"/api/auth/stripe", nil)
 	if err != nil {
 		return nil, fmt.Errorf("cursor: create Stripe request: %w", err)
 	}
@@ -253,7 +331,7 @@ func (c *CursorClient) fetchRequestBasedUsage(ctx context.Context, token string)
 	reqCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
-	reqURL := fmt.Sprintf("https://cursor.com/api/usage?user=%s", url.QueryEscape(userID))
+	reqURL := fmt.Sprintf("%s/api/usage?user=%s", cursorWebBaseURL, url.QueryEscape(userID))
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, reqURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("cursor: create request-based usage request: %w", err)

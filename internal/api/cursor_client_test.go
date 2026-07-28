@@ -2,7 +2,11 @@ package api
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
+	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -359,5 +363,174 @@ func TestShouldUseCursorRequestBasedUsage(t *testing.T) {
 	}
 	if !shouldUseCursorRequestBasedUsage(&CursorUsageResponse{Enabled: false, PlanUsage: nil}, requestUsage) {
 		t.Fatal("expected request-based usage for a disabled enterprise usage response")
+	}
+}
+
+// cursorTestToken builds an unsigned JWT carrying sub, which the cookie-authenticated
+// cursor.com surfaces are keyed on.
+func cursorTestToken(subject string) string {
+	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"sub":"` + subject + `"}`))
+	return "eyJhbGciOiJub25lIn0." + payload + "."
+}
+
+// cursorTeamServer answers the surfaces a team seat needs. The usage and legacy request
+// payloads are the real structural zeros an ORG_TOKEN_BASED_CONTRACT seat receives.
+func cursorTeamServer(t *testing.T, hardLimitBody string, hardLimitStatus int, calls map[string]int) *httptest.Server {
+	t.Helper()
+
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls[r.URL.Path]++
+		w.Header().Set("Content-Type", "application/json")
+
+		switch r.URL.Path {
+		case "/aiserver.v1.DashboardService/GetCurrentPeriodUsage":
+			w.Write([]byte(`{"billingCycleStart":"1785264303937","billingCycleEnd":"1785264303937","displayThreshold":100}`))
+		case "/aiserver.v1.DashboardService/GetPlanInfo":
+			w.Write([]byte(`{"planInfo":{"planName":"Enterprise","price":"Custom","billingCycleEnd":"1785542400000"}}`))
+		case "/aiserver.v1.DashboardService/GetAggregatedUsageEvents":
+			w.Write([]byte(`{"totalCostCents":1234.567891,"aggregations":[{"modelIntent":"default","totalCents":1234.567891}]}`))
+		case "/aiserver.v1.DashboardService/GetHardLimit":
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Errorf("read GetHardLimit body: %v", err)
+			}
+			var req struct {
+				TeamID int64 `json:"teamId"`
+			}
+			if err := json.Unmarshal(body, &req); err != nil {
+				t.Errorf("unmarshal GetHardLimit body %q: %v", body, err)
+			}
+			if req.TeamID != 987654 {
+				t.Errorf("GetHardLimit teamId = %d, want 987654 (without it the per-user cap is omitted)", req.TeamID)
+			}
+			if hardLimitStatus != http.StatusOK {
+				w.WriteHeader(hardLimitStatus)
+				return
+			}
+			w.Write([]byte(hardLimitBody))
+		case "/api/auth/stripe":
+			w.Write([]byte(`{"membershipType":"enterprise","isTeamMember":true,"teamId":987654,"teamMembershipType":"ORG_TOKEN_BASED_CONTRACT","customerBalance":0}`))
+		case "/api/usage":
+			w.Write([]byte(`{"gpt-4":{"numRequests":0,"numRequestsTotal":0,"numTokens":0,"maxTokenUsage":null,"maxRequestUsage":null},"startOfMonth":"2026-07-01T00:00:00.000Z"}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+}
+
+func TestCursorClient_FetchQuotas_TeamContract(t *testing.T) {
+	calls := map[string]int{}
+	server := cursorTeamServer(t, `{"hardLimit":25000,"hardLimitPerUser":150,"perUserMonthlyLimitDollars":200}`, http.StatusOK, calls)
+	defer server.Close()
+
+	originalWebBase := cursorWebBaseURL
+	cursorWebBaseURL = server.URL
+	defer func() { cursorWebBaseURL = originalWebBase }()
+
+	client := NewCursorClient(cursorTestToken("user_01TEAMSEAT"), slog.Default(), WithCursorBaseURL(server.URL))
+	snapshot, err := client.FetchQuotas(context.Background())
+	if err != nil {
+		t.Fatalf("FetchQuotas: %v", err)
+	}
+
+	if len(snapshot.Quotas) != 1 {
+		t.Fatalf("len(Quotas) = %d, want 1: %+v", len(snapshot.Quotas), snapshot.Quotas)
+	}
+	quota := snapshot.Quotas[0]
+	if quota.Name != "total_usage" {
+		t.Errorf("Name = %q, want total_usage", quota.Name)
+	}
+	if quota.Format != CursorFormatDollars {
+		t.Errorf("Format = %q, want %q", quota.Format, CursorFormatDollars)
+	}
+	if math.Abs(quota.Used-12.34567891) > 1e-9 {
+		t.Errorf("Used = %v, want 12.34567891 (totalCostCents/100)", quota.Used)
+	}
+	if quota.Limit != 200 {
+		t.Errorf("Limit = %v, want 200 (perUserMonthlyLimitDollars)", quota.Limit)
+	}
+	if math.Abs(quota.Utilization-6.172839455) > 1e-6 {
+		t.Errorf("Utilization = %v, want ~6.1728", quota.Utilization)
+	}
+	if quota.ResetsAt == nil {
+		t.Fatal("ResetsAt = nil, want planInfo.billingCycleEnd")
+	}
+	if got := quota.ResetsAt.UTC().Format(time.RFC3339); got != "2026-08-01T00:00:00Z" {
+		t.Errorf("ResetsAt = %s, want 2026-08-01T00:00:00Z", got)
+	}
+
+	if calls["/api/usage"] != 0 {
+		t.Errorf("legacy per-user usage endpoint called %d times; it reads zero on a team seat", calls["/api/usage"])
+	}
+}
+
+func TestCursorClient_FetchQuotas_TeamContractHardLimitFailure(t *testing.T) {
+	calls := map[string]int{}
+	server := cursorTeamServer(t, "", http.StatusInternalServerError, calls)
+	defer server.Close()
+
+	originalWebBase := cursorWebBaseURL
+	cursorWebBaseURL = server.URL
+	defer func() { cursorWebBaseURL = originalWebBase }()
+
+	client := NewCursorClient(cursorTestToken("user_01TEAMSEAT"), slog.Default(), WithCursorBaseURL(server.URL))
+	snapshot, err := client.FetchQuotas(context.Background())
+	if err == nil {
+		t.Fatalf("FetchQuotas succeeded with quotas %+v, want error so the last good snapshot is kept", snapshot.Quotas)
+	}
+	if snapshot != nil {
+		t.Errorf("snapshot = %+v, want nil", snapshot)
+	}
+}
+
+func TestCursorClient_FetchQuotas_TeamContractWithoutPerUserLimit(t *testing.T) {
+	calls := map[string]int{}
+	server := cursorTeamServer(t, `{"hardLimit":30000}`, http.StatusOK, calls)
+	defer server.Close()
+
+	originalWebBase := cursorWebBaseURL
+	cursorWebBaseURL = server.URL
+	defer func() { cursorWebBaseURL = originalWebBase }()
+
+	client := NewCursorClient(cursorTestToken("user_01TEAMSEAT"), slog.Default(), WithCursorBaseURL(server.URL))
+	if _, err := client.FetchQuotas(context.Background()); err == nil {
+		t.Fatal("FetchQuotas succeeded without a per-user cap, want error rather than a fabricated quota")
+	}
+}
+
+func TestCursorUsesTeamContract(t *testing.T) {
+	orgContractStripe := &CursorStripeResponse{IsTeamMember: true, TeamID: 987654, TeamMembershipType: CursorOrgTokenContract}
+	emptyUsage := &CursorUsageResponse{}
+
+	tests := []struct {
+		name   string
+		usage  *CursorUsageResponse
+		stripe *CursorStripeResponse
+		want   bool
+	}{
+		{"org contract seat with empty cycle", emptyUsage, orgContractStripe, true},
+		{"no stripe response", emptyUsage, nil, false},
+		{"individual account", emptyUsage, &CursorStripeResponse{IsTeamMember: false}, false},
+		{"team member without team id", emptyUsage, &CursorStripeResponse{IsTeamMember: true, TeamMembershipType: CursorOrgTokenContract}, false},
+		{
+			"team type we have not observed reading zero",
+			emptyUsage,
+			&CursorStripeResponse{IsTeamMember: true, TeamID: 987654, TeamMembershipType: "SEAT_BASED"},
+			false,
+		},
+		{
+			"seat billed against its own plan",
+			&CursorUsageResponse{PlanUsage: &CursorPlanUsage{Limit: 40000}},
+			orgContractStripe,
+			false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := cursorUsesTeamContract(tt.usage, tt.stripe); got != tt.want {
+				t.Errorf("cursorUsesTeamContract() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
