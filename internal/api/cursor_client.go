@@ -120,7 +120,8 @@ func (c *CursorClient) FetchQuotas(ctx context.Context) (*CursorSnapshot, error)
 
 	// The Stripe surface is the only place the seat's team membership is visible, and
 	// teamId is required to read the per-user cap, so it is fetched before any decision
-	// about which usage surface to trust.
+	// about which usage surface to trust. A nil response means unresolved membership,
+	// whether the call errored or merely answered non-200.
 	var stripeResp *CursorStripeResponse
 	if sr, err := c.fetchStripeBalance(ctx, token); err != nil {
 		c.logger.Debug("cursor: failed to fetch Stripe balance", "error", err)
@@ -140,8 +141,16 @@ func (c *CursorClient) FetchQuotas(ctx context.Context) (*CursorSnapshot, error)
 		teamContract = tc
 	}
 
+	// The per-user surfaces are only trustworthy once the seat is known not to bill
+	// against an org contract. Reading them on unresolved membership is how a transient
+	// Stripe failure would publish a structural zero.
+	needsPerUserSurfaces := teamContract == nil && shouldFetchCursorRequestBasedUsage(usage, normalizedPlan)
+	if needsPerUserSurfaces && stripeResp == nil {
+		return nil, fmt.Errorf("%w: team membership unresolved; refusing to publish per-user counters", ErrCursorInvalidResponse)
+	}
+
 	var requestUsage *CursorRequestUsageResponse
-	if teamContract == nil && shouldFetchCursorRequestBasedUsage(usage, normalizedPlan) {
+	if needsPerUserSurfaces {
 		ru, err := c.fetchRequestBasedUsage(ctx, token)
 		if err != nil {
 			c.logger.Warn("cursor: failed to fetch request-based usage", "error", err)
