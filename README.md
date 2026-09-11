@@ -127,6 +127,7 @@ Provider setup guides:
 - [MiniMax Setup Guide](docs/MINIMAX_SETUP.md)
 - [Antigravity Setup Guide](docs/ANTIGRAVITY_SETUP.md)
 - [Cursor Setup Guide](docs/CURSOR_SETUP.md)
+- [Token Command Setup Guide](docs/TOKEN_COMMAND_SETUP.md) - Secret-manager and command-backed token refresh
 - [API Integration Setup Guide](docs/API_INTEGRATIONS_SETUP.md)
 
 ### Run
@@ -339,8 +340,10 @@ Additional environment variables:
 
 | Variable                 | Description                                            |
 | ------------------------ | ------------------------------------------------------ |
-| `ANTHROPIC_TOKEN`        | Anthropic OAuth token (auto-detected from Claude Code) |
-| `CODEX_TOKEN`            | Codex OAuth access token (recommended for Codex-only)  |
+| `ANTHROPIC_TOKEN`         | Anthropic OAuth token (auto-detected from Claude Code)          |
+| `ANTHROPIC_TOKEN_COMMAND` | Shell command for Anthropic token (see Token Command Setup)     |
+| `CODEX_TOKEN`             | Codex OAuth access token (recommended for Codex-only)           |
+| `CODEX_TOKEN_COMMAND`     | Shell command for Codex token (see Token Command Setup)        |
 | `COPILOT_TOKEN`          | GitHub Copilot PAT with `copilot` scope (Beta)         |
 | `MINIMAX_API_KEY`        | MiniMax Coding Plan API key                            |
 | `MINIMAX_REGION`         | MiniMax region: `global` (default) or `cn`              |
@@ -349,7 +352,8 @@ Additional environment variables:
 | `GEMINI_ACCESS_TOKEN`    | Gemini OAuth access token (for Docker/headless)          |
 | `GEMINI_CLIENT_ID`       | Custom OAuth client ID (optional, has defaults)          |
 | `GEMINI_CLIENT_SECRET`   | Custom OAuth client secret (optional, has defaults)      |
-| `CURSOR_TOKEN`           | Cursor access token (auto-detected from Cursor Desktop)|
+| `CURSOR_TOKEN`            | Cursor access token (auto-detected from Cursor Desktop)         |
+| `CURSOR_TOKEN_COMMAND`    | Shell command for Cursor token (see Token Command Setup)       |
 | `GROK_TOKEN`             | Grok bearer from `grok login` (or auto-detected from ~/.grok/auth.json)|
 | `GROK_ENABLED`           | Enable Grok provider (default: auto when auth present; set false to disable)|
 | `GROK_HOME`              | Custom Grok home dir (default ~/.grok; auth.json and sessions live here)|
@@ -583,15 +587,21 @@ Copy `.env.docker.example` to `.env` and set provider keys as needed. onWatch ca
 | `SYNTHETIC_API_KEY`     | Synthetic API key                          | --         |
 | `ZAI_API_KEY`           | Z.ai API key                               | --         |
 | `ZAI_REGION`            | Z.ai region: `global` (default) or `cn`    | `global`   |
-| `ANTHROPIC_TOKEN`       | Anthropic token (auto-detected if not set) | --         |
-| `CODEX_TOKEN`           | Codex OAuth access token (recommended; required for Codex-only) | -- |
-| `MINIMAX_API_KEY`       | MiniMax Coding Plan API key                | --         |
-| `MINIMAX_REGION`        | MiniMax region: `global` (default) or `cn` | `global`   |
+| `ANTHROPIC_TOKEN`         | Anthropic token (auto-detected if not set)                     | --         |
+| `ANTHROPIC_TOKEN_COMMAND` | Shell command for Anthropic token (trimmed stdout)              | --         |
+| `CODEX_TOKEN`             | Codex OAuth access token (recommended; required for Codex-only) | --         |
+| `CODEX_TOKEN_COMMAND`     | Shell command for Codex token (trimmed stdout)                 | --         |
+| `CURSOR_TOKEN`            | Cursor token (auto-detected if not set)                        | --         |
+| `CURSOR_TOKEN_COMMAND`    | Shell command for Cursor token (trimmed stdout)                | --         |
+| `MINIMAX_API_KEY`        | MiniMax Coding Plan API key                                | --         |
+| `MINIMAX_REGION`        | MiniMax region: `global` (default) or `cn`             | `global`   |
 | `GEMINI_REFRESH_TOKEN`  | Gemini OAuth refresh token (Beta)          | --         |
 | `ONWATCH_ADMIN_USER`    | Dashboard username                         | `admin`    |
 | `ONWATCH_ADMIN_PASS`    | Dashboard password                         | `changeme` |
 | `ONWATCH_POLL_INTERVAL` | Polling interval (seconds)                 | `120`      |
 | `ONWATCH_LOG_LEVEL`     | Log level                                  | `info`     |
+
+See [Token Command Setup](docs/TOKEN_COMMAND_SETUP.md) for secret-manager and OMP examples.
 
 ### Storage
 

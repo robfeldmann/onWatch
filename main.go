@@ -730,10 +730,37 @@ func run() error {
 	// Resolve auth tokens before any banner output so displayed providers
 	// match the providers that will actually start.
 	preflightLogger := slog.Default()
+	if cfg.AnthropicTokenCommand != "" {
+		preflightLogger.Info("anthropic token source: command")
+	}
+	anthropicCommandFailed := false
+	if cfg.AnthropicTokenCommand != "" {
+		if token, err := api.RunTokenCommand(context.Background(), cfg.AnthropicTokenCommand); err != nil {
+			anthropicCommandFailed = true
+			preflightLogger.Error("failed to run Anthropic token command", "error", err)
+		} else if cfg.AnthropicToken == "" {
+			cfg.AnthropicToken = token
+		}
+	}
 	if cfg.AnthropicToken == "" {
 		if token := api.DetectAnthropicToken(preflightLogger); token != "" {
 			cfg.AnthropicToken = token
 			cfg.AnthropicAutoToken = true
+		}
+	}
+	if anthropicCommandFailed && cfg.AnthropicToken == "" {
+		cfg.AnthropicTokenCommand = ""
+	}
+	if cfg.CodexTokenCommand != "" {
+		preflightLogger.Info("codex token source: command")
+	}
+	codexCommandFailed := false
+	if cfg.CodexTokenCommand != "" {
+		if token, err := api.RunTokenCommand(context.Background(), cfg.CodexTokenCommand); err != nil {
+			codexCommandFailed = true
+			preflightLogger.Error("failed to run Codex token command", "error", err)
+		} else if cfg.CodexToken == "" {
+			cfg.CodexToken = token
 		}
 	}
 	if cfg.CodexToken == "" {
@@ -747,6 +774,9 @@ func run() error {
 				cfg.CodexAutoSource = "codex"
 			}
 		}
+	}
+	if codexCommandFailed && cfg.CodexToken == "" {
+		cfg.CodexTokenCommand = ""
 	}
 
 	// If no global Codex token, check if saved profiles exist to bootstrap the provider.
@@ -790,11 +820,26 @@ func run() error {
 		}
 	}
 
+	if cfg.CursorTokenCommand != "" {
+		preflightLogger.Info("cursor token source: command")
+	}
+	cursorCommandFailed := false
+	if cfg.CursorTokenCommand != "" {
+		if token, err := api.RunTokenCommand(context.Background(), cfg.CursorTokenCommand); err != nil {
+			cursorCommandFailed = true
+			preflightLogger.Error("failed to run Cursor token command", "error", err)
+		} else if cfg.CursorToken == "" {
+			cfg.CursorToken = token
+		}
+	}
 	if cfg.CursorToken == "" {
 		if token := api.DetectCursorToken(preflightLogger); token != "" {
 			cfg.CursorToken = token
 			cfg.CursorAutoToken = true
 		}
+	}
+	if cursorCommandFailed && cfg.CursorToken == "" {
+		cfg.CursorTokenCommand = ""
 	}
 
 	// Grok provider auto-detect from ~/.grok/auth.json (or $GROK_HOME). Explicit GROK_TOKEN wins in config.
@@ -1042,7 +1087,10 @@ func run() error {
 
 	var codexClient *api.CodexClient
 	if cfg.CodexToken != "" {
-		codexCreds := api.DetectCodexCredentials(logger)
+		var codexCreds *api.CodexCredentials
+		if cfg.CodexTokenCommand == "" {
+			codexCreds = api.DetectCodexCredentials(logger)
+		}
 		codexClient = api.NewCodexClient(cfg.CodexToken, logger)
 		if codexCreds != nil && codexCreds.AccountID != "" {
 			codexClient.SetAccountID(codexCreds.AccountID)
@@ -1203,8 +1251,10 @@ func run() error {
 		anthropicSm := agent.NewSessionManager(db, "anthropic", idleTimeout, logger)
 		anthropicAg = agent.NewAnthropicAgent(anthropicClient, db, anthropicTr, cfg.PollInterval, logger, anthropicSm)
 
-		// Enable API polling for "auto" and "api" modes
-		if anthropicSource == "auto" || anthropicSource == "api" {
+		// Enable API polling for "auto" and "api" modes.
+		if cfg.AnthropicTokenCommand != "" {
+			anthropicAg.SetTokenRefresh(api.TokenCommandRefresher(cfg.AnthropicTokenCommand, logger))
+		} else if anthropicSource == "auto" || anthropicSource == "api" {
 			anthropicAg.SetTokenRefresh(func() string {
 				return api.DetectAnthropicToken(logger)
 			})
@@ -1270,6 +1320,9 @@ func run() error {
 	if cfg.HasProvider("codex") {
 		codexMgr = agent.NewCodexAgentManager(db, codexTr, cfg.PollInterval, logger)
 		codexMgr.SetProfilesDir(codexProfilesDirWithDataDir(filepath.Dir(cfg.DBPath)))
+		if cfg.CodexTokenCommand != "" {
+			codexMgr.SetTokenCommand(api.TokenCommandRefresher(cfg.CodexTokenCommand, logger), cfg.CodexToken)
+		}
 		// Override profiles dir from DB if configured via UI
 		if db != nil {
 			if provJSON, _ := db.GetSetting("provider_settings"); provJSON != "" {
@@ -1399,15 +1452,19 @@ func run() error {
 	if cursorClient != nil {
 		cursorSm := agent.NewSessionManager(db, "cursor", idleTimeout, logger)
 		cursorAg = agent.NewCursorAgent(cursorClient, db, cursorTr, cfg.PollInterval, logger, cursorSm)
-		cursorAg.SetTokenRefresh(func() string {
-			return api.DetectCursorToken(logger)
-		})
-		cursorAg.SetCredentialsRefresh(func() *api.CursorCredentials {
-			return api.DetectCursorCredentials(logger)
-		})
-		cursorAg.SetTokenSave(func(accessToken, refreshToken string) error {
-			return api.WriteCursorCredentials(accessToken, refreshToken)
-		})
+		if cfg.CursorTokenCommand != "" {
+			cursorAg.SetTokenRefresh(api.TokenCommandRefresher(cfg.CursorTokenCommand, logger))
+		} else {
+			cursorAg.SetTokenRefresh(func() string {
+				return api.DetectCursorToken(logger)
+			})
+			cursorAg.SetCredentialsRefresh(func() *api.CursorCredentials {
+				return api.DetectCursorCredentials(logger)
+			})
+			cursorAg.SetTokenSave(func(accessToken, refreshToken string) error {
+				return api.WriteCursorCredentials(accessToken, refreshToken)
+			})
+		}
 	}
 
 	var grokAg *agent.GrokAgent

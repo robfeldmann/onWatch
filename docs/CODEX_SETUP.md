@@ -69,6 +69,7 @@ Set:
 ```bash
 CODEX_TOKEN=your_codex_oauth_access_token
 ```
+For secret-manager-backed tokens, use `CODEX_TOKEN_COMMAND`; see the [Token Command Setup Guide](TOKEN_COMMAND_SETUP.md).
 
 Notes:
 - If Codex is your only provider, `CODEX_TOKEN` must be set so startup validation passes.
