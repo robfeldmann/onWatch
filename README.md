@@ -14,11 +14,12 @@ See history, get alerts, and open a local web dashboard before you hit throttlin
 [![Downloads](https://img.shields.io/github/downloads/onllm-dev/onwatch/total?style=for-the-badge&logo=github&logoColor=white&label=Downloads&color=181717)](https://github.com/onllm-dev/onwatch/releases)  
 [![Coverage](https://img.shields.io/codecov/c/github/onllm-dev/onwatch?style=for-the-badge&logo=codecov&logoColor=white&label=Coverage)](https://codecov.io/gh/onllm-dev/onwatch)
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-brightgreen?style=for-the-badge&logo=gnu&logoColor=white)](LICENSE)
-[![Go Report Card](https://goreportcard.com/badge/github.com/onllm-dev/onwatch/v2?style=for-the-badge)](https://goreportcard.com/report/github.com/onllm-dev/onwatch/v2)
+
+<a href="https://trendshift.io/repositories/22078?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-22078" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/22078/daily?language=Go" alt="onllm-dev%2FonWatch | Trendshift" width="250" height="55"/></a>
 
 **Compatibility & Docs**
 
-[![Version](https://img.shields.io/badge/Version-v2.14.2-0EA5E9?style=for-the-badge)](https://github.com/onllm-dev/onwatch/releases/tag/v2.14.2)
+[![Version](https://img.shields.io/badge/Version-v2.14.3-0EA5E9?style=for-the-badge)](https://github.com/onllm-dev/onwatch/releases/tag/v2.14.3)
 [![VS Code Marketplace](https://img.shields.io/visual-studio-marketplace/v/onllm-dev.onwatch?style=for-the-badge&logo=visualstudiocode&logoColor=white&label=VS%20Code)](https://marketplace.visualstudio.com/items?itemName=onllm-dev.onwatch)
 [![Go 1.25+](https://img.shields.io/badge/Go-1.25+-00ADD8?style=for-the-badge&logo=go&logoColor=white)](https://go.dev)
 [![Platform](https://img.shields.io/badge/macOS%20%7C%20Linux%20%7C%20Windows-orange?style=for-the-badge&logo=apple&logoColor=white)](#quick-start)
@@ -205,7 +206,7 @@ Each quota card shows: usage vs. limit with progress bar, live countdown to rese
 
 **Sessions** -- Every agent run creates a session that tracks peak consumption, letting you compare usage across work periods.
 
-**Settings** -- Dedicated settings page (`/settings`) with tabs for general preferences, provider controls, notification thresholds, and SMTP email configuration.
+**Settings** -- Dedicated settings page (`/settings`) with tabs for general preferences, provider controls, notification thresholds, webhook delivery, and SMTP email configuration.
 
 **Custom API Integrations setup** -- Use a small wrapper around your own API calls to append normalised JSONL events into `~/.onwatch/api-integrations/`, then open the API Integrations tab to monitor cumulative and recent usage. Full setup instructions live in [docs/API_INTEGRATIONS_SETUP.md](docs/API_INTEGRATIONS_SETUP.md).
 
@@ -220,9 +221,11 @@ The tray is currently in beta. Feedback is highly appreciated at [github.com/onl
 
 **VS Code extension** -- Shows your tightest quota in the VS Code status bar (`82%`, with time to reset at critical), colored by your theme at warning and critical. Hover for a per-provider breakdown; click to open the quick view or the full dashboard inside VS Code. The extension is a thin client for the daemon and follows the same menubar preferences (provider order, visibility, thresholds), so it stays in sync with the dashboard. Zero telemetry. Install it from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=onllm-dev.onwatch) (`code --install-extension onllm-dev.onwatch`), grab the `.vsix` from any release, or build it from [extensions/vscode](extensions/vscode). Full setup, settings and troubleshooting live in [docs/VSCODE_EXTENSION.md](docs/VSCODE_EXTENSION.md).
 
-**Email notifications (Beta)** -- Configure SMTP to receive alerts when quotas cross warning or critical thresholds, or when quotas reset. Per-quota threshold overrides for fine-grained control. SMTP passwords are encrypted at rest with AES-GCM.
+**Email notifications (Beta)** -- Configure SMTP to receive alerts when quotas cross warning or critical thresholds, or when quotas reset. Per-quota threshold overrides for fine-grained control. Alerts fire once per quota cycle by default, or repeat on a configurable cooldown while a quota stays over threshold. SMTP passwords are encrypted at rest with AES-GCM.
 
-**Push notifications (Beta)** -- Receive browser push notifications when quotas cross thresholds. onWatch is a PWA (Progressive Web App) - install it from your browser for a native app experience. Uses Web Push protocol (VAPID) with zero external dependencies. Configure delivery channels (email, push, or both) per your preference.
+**Push notifications (Beta)** -- Receive browser push notifications when quotas cross thresholds. onWatch is a PWA (Progressive Web App) - install it from your browser for a native app experience. Uses Web Push protocol (VAPID) with zero external dependencies. Configure delivery channels (email, push, webhook, or any combination) per your preference.
+
+**Webhook notifications (Beta)** -- POST a JSON payload to any HTTP endpoint on warning, critical, reset, auth error, and Codex quota-starter events. Works with ntfy, Gotify, and custom services, with optional bearer-token auth and custom headers. Payloads never contain credentials. See [docs/WEBHOOK_SETUP.md](docs/WEBHOOK_SETUP.md).
 
 **Dark/Light mode** -- Toggle via sun/moon icon in the header. Auto-detects system preference on first visit and persists your choice across sessions.
 
@@ -419,6 +422,7 @@ All endpoints require authentication (session cookie or Basic Auth). Append `?pr
 | `/api/api-integrations/history` | GET         | Chart-ready API integration history, `?range=` |
 | `/api/api-integrations/health`  | GET         | API integration ingest health and file state   |
 | `/api/settings/smtp/test`       | POST        | Send test email via configured SMTP            |
+| `/api/settings/webhook/test`    | POST        | Send test payload to configured webhook        |
 | `/api/password`                 | PUT         | Change password                                |
 | `/api/push/vapid`               | GET         | Get VAPID public key for push subscription     |
 | `/api/push/subscribe`           | POST/DELETE | Subscribe/unsubscribe push endpoint            |
@@ -642,7 +646,7 @@ The `docker-compose.yml` includes memory limits (64M limit, 32M reservation), lo
 - API keys loaded from `.env`, never committed, redacted in all log output
 - Session-based auth with cookie + Basic Auth fallback
 - Passwords stored as SHA-256 hashes with constant-time comparison
-- SMTP passwords encrypted at rest with AES-256-GCM (key derived from admin password)
+- SMTP passwords and webhook bearer tokens encrypted at rest with AES-256-GCM (key derived from admin password)
 - VAPID keys auto-generated (ECDSA P-256) and stored in database
 - Web Push payloads encrypted per RFC 8291 (ECDH + HKDF + AES-128-GCM)
 - Parameterized SQL queries throughout

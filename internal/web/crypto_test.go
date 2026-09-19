@@ -364,3 +364,164 @@ func TestReEncryptSMTPPassword_Branches(t *testing.T) {
 		})
 	}
 }
+
+// The webhook bearer token is encrypted with the admin-password-derived key,
+// so a password change must re-encrypt it alongside the SMTP password or the
+// token becomes unreadable at the next startup.
+func TestReEncryptAllData_ReEncryptsWebhookToken(t *testing.T) {
+	setTestEncryptionSalt(t, []byte("abcdefghijklmnop"))
+	store := newMemorySettingStore()
+
+	oldKey := DeriveEncryptionKey("old-hash", nil)
+	newKey := DeriveEncryptionKey("new-hash", nil)
+
+	encrypted, err := notify.EncryptForStorage("tk_secret", oldKey)
+	if err != nil {
+		t.Fatalf("EncryptForStorage() error = %v", err)
+	}
+	store.settings["webhook"] = `{"url":"https://ntfy.sh/topic","bearer_token":"` + encrypted + `","events":{"warning":true}}`
+
+	errs := ReEncryptAllData(store, "old-hash", "new-hash")
+	if len(errs) != 0 {
+		t.Fatalf("ReEncryptAllData() errors = %v, want none", errs)
+	}
+
+	var got map[string]any
+	if err := json.Unmarshal([]byte(store.settings["webhook"]), &got); err != nil {
+		t.Fatalf("failed to parse updated webhook setting: %v", err)
+	}
+	ciphertext, _ := got["bearer_token"].(string)
+	if !IsEncryptedValue(ciphertext) {
+		t.Fatalf("bearer_token = %q, want it to keep the encrypted prefix", ciphertext)
+	}
+	plaintext, err := notify.DecryptFromStorage(ciphertext, newKey)
+	if err != nil {
+		t.Fatalf("DecryptFromStorage() with new key error = %v", err)
+	}
+	if plaintext != "tk_secret" {
+		t.Fatalf("re-encrypted token = %q, want tk_secret", plaintext)
+	}
+	// Other fields survive the rewrite.
+	if got["url"] != "https://ntfy.sh/topic" {
+		t.Errorf("url = %v, want preserved", got["url"])
+	}
+}
+
+func TestReEncryptAllData_WebhookWithoutTokenIsUntouched(t *testing.T) {
+	setTestEncryptionSalt(t, []byte("abcdefghijklmnop"))
+	store := newMemorySettingStore()
+	store.settings["webhook"] = `{"url":"https://ntfy.sh/topic"}`
+
+	if errs := ReEncryptAllData(store, "old-hash", "new-hash"); len(errs) != 0 {
+		t.Fatalf("ReEncryptAllData() errors = %v, want none", errs)
+	}
+	if store.setCalls != 0 {
+		t.Fatalf("SetSetting calls = %d, want 0 when there is no token", store.setCalls)
+	}
+}
+
+func TestReEncryptAllData_CollectsWebhookError(t *testing.T) {
+	setTestEncryptionSalt(t, []byte("abcdefghijklmnop"))
+	store := newMemorySettingStore()
+	store.settings["webhook"] = "not-json"
+
+	errs := ReEncryptAllData(store, "old-hash", "new-hash")
+	if _, ok := errs["webhook"]; !ok {
+		t.Fatalf("ReEncryptAllData() should include a webhook error, got %v", errs)
+	}
+}
+
+// Regression: the SMTP password is stored by UpdateSettings with bare
+// notify.Encrypt (no "enc:" prefix), but reEncryptSMTPPassword used
+// IsEncryptedValue - a prefix check - to tell ciphertext from plaintext. It
+// therefore treated stored ciphertext as plaintext and encrypted it a second
+// time, and ConfigureSMTP then decrypted only the outer layer and handed the
+// inner ciphertext to the mail server as the password.
+func TestReEncryptSMTPPassword_DoesNotDoubleEncryptStoredCiphertext(t *testing.T) {
+	setTestEncryptionSalt(t, []byte("abcdefghijklmnop"))
+	store := newMemorySettingStore()
+
+	oldKey := DeriveEncryptionKey("old-hash", nil)
+	newKey := DeriveEncryptionKey("new-hash", nil)
+
+	// Exactly how UpdateSettings persists it: bare ciphertext, no prefix.
+	stored, err := notify.Encrypt("smtp-secret", oldKey)
+	if err != nil {
+		t.Fatalf("Encrypt() error = %v", err)
+	}
+	store.settings["smtp"] = `{"host":"smtp.example.com","password":"` + stored + `"}`
+
+	if errs := ReEncryptAllData(store, "old-hash", "new-hash"); len(errs) != 0 {
+		t.Fatalf("ReEncryptAllData() errors = %v, want none", errs)
+	}
+
+	var got map[string]any
+	if err := json.Unmarshal([]byte(store.settings["smtp"]), &got); err != nil {
+		t.Fatalf("failed to parse updated smtp setting: %v", err)
+	}
+	ciphertext, _ := got["password"].(string)
+
+	plaintext, err := notify.Decrypt(ciphertext, newKey)
+	if err != nil {
+		t.Fatalf("notify.Decrypt() with new key error = %v", err)
+	}
+	if plaintext != "smtp-secret" {
+		t.Fatalf("decrypted password = %q, want %q (a second decrypt would be needed if it was double-encrypted)", plaintext, "smtp-secret")
+	}
+}
+
+// A password saved before encryption existed is plaintext and must simply be
+// encrypted with the new key.
+func TestReEncryptSMTPPassword_EncryptsLegacyPlaintext(t *testing.T) {
+	setTestEncryptionSalt(t, []byte("abcdefghijklmnop"))
+	store := newMemorySettingStore()
+	newKey := DeriveEncryptionKey("new-hash", nil)
+
+	store.settings["smtp"] = `{"host":"smtp.example.com","password":"plain-secret"}`
+
+	if errs := ReEncryptAllData(store, "old-hash", "new-hash"); len(errs) != 0 {
+		t.Fatalf("ReEncryptAllData() errors = %v, want none", errs)
+	}
+
+	var got map[string]any
+	json.Unmarshal([]byte(store.settings["smtp"]), &got)
+	ciphertext, _ := got["password"].(string)
+	if ciphertext == "plain-secret" {
+		t.Fatal("plaintext password was left unencrypted")
+	}
+	plaintext, err := notify.Decrypt(ciphertext, newKey)
+	if err != nil {
+		t.Fatalf("notify.Decrypt() with new key error = %v", err)
+	}
+	if plaintext != "plain-secret" {
+		t.Fatalf("decrypted password = %q, want plain-secret", plaintext)
+	}
+}
+
+// A retried password change must not corrupt an already re-keyed password.
+func TestReEncryptSMTPPassword_AlreadyReKeyedIsLeftAlone(t *testing.T) {
+	setTestEncryptionSalt(t, []byte("abcdefghijklmnop"))
+	store := newMemorySettingStore()
+	newKey := DeriveEncryptionKey("new-hash", nil)
+
+	stored, err := notify.Encrypt("smtp-secret", newKey)
+	if err != nil {
+		t.Fatalf("Encrypt() error = %v", err)
+	}
+	store.settings["smtp"] = `{"password":"` + stored + `"}`
+
+	if errs := ReEncryptAllData(store, "old-hash", "new-hash"); len(errs) != 0 {
+		t.Fatalf("ReEncryptAllData() errors = %v, want none", errs)
+	}
+
+	var got map[string]any
+	json.Unmarshal([]byte(store.settings["smtp"]), &got)
+	ciphertext, _ := got["password"].(string)
+	plaintext, err := notify.Decrypt(ciphertext, newKey)
+	if err != nil {
+		t.Fatalf("notify.Decrypt() with new key error = %v", err)
+	}
+	if plaintext != "smtp-secret" {
+		t.Fatalf("decrypted password = %q, want smtp-secret", plaintext)
+	}
+}
