@@ -165,6 +165,14 @@ func TestParseCursorTeamContractSurfaces_StringNumbers(t *testing.T) {
 		t.Errorf("PerUserMonthlyLimitDollars = %d, want 250", hardLimit.PerUserMonthlyLimitDollars)
 	}
 
+	events, err := ParseCursorFilteredUsageEventsResponse([]byte(`{"totalUsageEventsCount":"1","usageEventsDisplay":[{"kind":"USAGE_EVENT_KIND_USAGE_BASED","chargedCents":"42.25"}]}`))
+	if err != nil {
+		t.Fatalf("ParseCursorFilteredUsageEventsResponse: %v", err)
+	}
+	if events.TotalUsageEventsCount != 1 || len(events.UsageEventsDisplay) != 1 || events.UsageEventsDisplay[0].ChargedCents != 42.25 {
+		t.Errorf("events = %+v, want one usage-based event of 42.25 cents", events)
+	}
+
 	if _, err := ParseCursorHardLimitResponse([]byte(`{"perUserMonthlyLimitDollars":"N/A"}`)); err == nil {
 		t.Error("a garbage per-user cap must fail the decode: a team seat has no safe fallback")
 	}

@@ -435,13 +435,28 @@ func (s *CursorStripeResponse) UnmarshalJSON(data []byte) error {
 }
 
 // CursorAggregatedUsageResponse is GetAggregatedUsageEvents. On a team seat this is the
-// only surface that sees the money: spend accrues against the org contract, so
+// only summary surface that sees the money: spend accrues against the org contract, so
 // GetCurrentPeriodUsage reports an empty billing cycle and the legacy per-user request
-// counter is structurally zero. TotalCostCents is fractional cents, not minor units.
-// Numbers may arrive quoted, like the other Cursor surfaces (#151); a value that does
-// not parse fails the decode, because a team seat has no safe fallback reading.
+// counter is structurally zero. TotalCostCents is fractional cents, not minor units, and
+// covers only spend included in the business plan, not usage-based spend. Numbers may
+// arrive quoted, like the other Cursor surfaces (#151); a value that does not parse
+// fails the decode, because a team seat has no safe fallback reading.
 type CursorAggregatedUsageResponse struct {
 	TotalCostCents cursorFlexFloat `json:"totalCostCents"`
+}
+
+// CursorUsageEventKindUsageBased marks an event billed on demand rather than against the
+// business plan's included spend.
+const CursorUsageEventKindUsageBased = "USAGE_EVENT_KIND_USAGE_BASED"
+
+// CursorFilteredUsageEventsResponse is one page of GetFilteredUsageEvents.
+// ChargedCents is fractional cents, like TotalCostCents.
+type CursorFilteredUsageEventsResponse struct {
+	TotalUsageEventsCount cursorFlexInt `json:"totalUsageEventsCount"`
+	UsageEventsDisplay    []struct {
+		Kind         string          `json:"kind"`
+		ChargedCents cursorFlexFloat `json:"chargedCents"`
+	} `json:"usageEventsDisplay"`
 }
 
 // CursorHardLimitResponse is GetHardLimit. HardLimit and HardLimitPerUser are org-wide
@@ -453,11 +468,12 @@ type CursorHardLimitResponse struct {
 	PerUserMonthlyLimitDollars cursorFlexInt `json:"perUserMonthlyLimitDollars"`
 }
 
-// CursorTeamContract pairs the two team-seat responses that must agree for a spend
-// quota to be meaningful.
+// CursorTeamContract pairs the team-seat responses that must agree for a spend quota to
+// be meaningful. UsageBasedCents is the cycle's usage-based spend, which Aggregated omits.
 type CursorTeamContract struct {
-	Aggregated *CursorAggregatedUsageResponse
-	HardLimit  *CursorHardLimitResponse
+	Aggregated      *CursorAggregatedUsageResponse
+	UsageBasedCents float64
+	HardLimit       *CursorHardLimitResponse
 }
 
 type CursorOAuthResponse struct {
@@ -557,6 +573,14 @@ func ParseCursorStripeResponse(data []byte) (*CursorStripeResponse, error) {
 
 func ParseCursorAggregatedUsageResponse(data []byte) (*CursorAggregatedUsageResponse, error) {
 	var resp CursorAggregatedUsageResponse
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func ParseCursorFilteredUsageEventsResponse(data []byte) (*CursorFilteredUsageEventsResponse, error) {
+	var resp CursorFilteredUsageEventsResponse
 	if err := json.Unmarshal(data, &resp); err != nil {
 		return nil, err
 	}
@@ -947,7 +971,7 @@ func buildTeamContractQuotas(contract *CursorTeamContract, planInfo *CursorPlanI
 		return nil
 	}
 
-	usedDollars := float64(contract.Aggregated.TotalCostCents) / 100
+	usedDollars := (float64(contract.Aggregated.TotalCostCents) + contract.UsageBasedCents) / 100
 
 	var billingCycleEnd *time.Time
 	if planInfo != nil {
