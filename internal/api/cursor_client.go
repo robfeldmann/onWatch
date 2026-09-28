@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -131,7 +132,7 @@ func (c *CursorClient) FetchQuotas(ctx context.Context) (*CursorSnapshot, error)
 
 	var teamContract *CursorTeamContract
 	if cursorUsesTeamContract(usage, stripeResp) {
-		tc, err := c.fetchTeamContract(ctx, token, stripeResp.TeamID)
+		tc, err := c.fetchTeamContract(ctx, token, stripeResp.TeamID, planInfo)
 		if err != nil {
 			// Falling through to the per-user surfaces would publish this seat's
 			// structural zero and overwrite the last good spend reading, so fail the
@@ -227,13 +228,23 @@ func cursorUsesTeamContract(usage *CursorUsageResponse, stripeResp *CursorStripe
 	return true
 }
 
-// fetchTeamContract reads the two halves of a team seat's spend picture: month-to-date
-// spend and the per-user monthly cap. Either half missing makes the other unusable, and
-// the caller has no safe fallback for a team seat, so both are required.
-func (c *CursorClient) fetchTeamContract(ctx context.Context, token string, teamID int64) (*CursorTeamContract, error) {
+// fetchTeamContract reads the parts of a team seat's spend picture: month-to-date
+// included spend, month-to-date usage-based spend, and the per-user monthly cap. Any
+// part missing makes the others unusable, and the caller has no safe fallback for a
+// team seat, so all are required.
+func (c *CursorClient) fetchTeamContract(ctx context.Context, token string, teamID int64, planInfo *CursorPlanInfoResponse) (*CursorTeamContract, error) {
 	aggregated, err := c.fetchAggregatedUsageEvents(ctx, token)
 	if err != nil {
 		return nil, fmt.Errorf("aggregated usage events: %w", err)
+	}
+
+	cycleStart, cycleEnd, err := cursorTeamBillingCycle(planInfo)
+	if err != nil {
+		return nil, err
+	}
+	usageBasedCents, err := c.fetchUsageBasedSpendCents(ctx, token, cycleStart, cycleEnd)
+	if err != nil {
+		return nil, fmt.Errorf("usage-based events: %w", err)
 	}
 
 	hardLimit, err := c.fetchHardLimit(ctx, token, teamID)
@@ -244,7 +255,67 @@ func (c *CursorClient) fetchTeamContract(ctx context.Context, token string, team
 		return nil, fmt.Errorf("%w: team %d reported no per-user monthly limit", ErrCursorInvalidResponse, teamID)
 	}
 
-	return &CursorTeamContract{Aggregated: aggregated, HardLimit: hardLimit}, nil
+	return &CursorTeamContract{Aggregated: aggregated, UsageBasedCents: usageBasedCents, HardLimit: hardLimit}, nil
+}
+
+// cursorTeamBillingCycle derives the seat's current billing cycle from GetPlanInfo, the
+// only surface that reports it: GetCurrentPeriodUsage returns an empty cycle on a team
+// seat, and GetPlanInfo carries only the end, so the start is one month earlier, taken in
+// UTC where the cycle boundaries fall. Without the end GetFilteredUsageEvents would have
+// to be asked for the account's whole history.
+func cursorTeamBillingCycle(planInfo *CursorPlanInfoResponse) (time.Time, time.Time, error) {
+	if planInfo == nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("%w: plan info unavailable; billing cycle unknown", ErrCursorInvalidResponse)
+	}
+	end, err := ParseUnixMsString(planInfo.PlanInfo.BillingCycleEnd)
+	if err != nil || end.IsZero() {
+		return time.Time{}, time.Time{}, fmt.Errorf("%w: plan info has no billing cycle end", ErrCursorInvalidResponse)
+	}
+	end = end.UTC()
+	return end.AddDate(0, -1, 0), end, nil
+}
+
+// cursorUsageEventsPageSize keeps a page well inside connectPost's 64 KiB body cap: an
+// event is about 530 bytes, so 100 events already come close. cursorUsageEventsMaxPages
+// bounds the scan at 5,000 events; a busy seat logs a few hundred a month, so the cap
+// only trips on a response that never reaches its own reported total.
+const (
+	cursorUsageEventsPageSize = 50
+	cursorUsageEventsMaxPages = 100
+)
+
+// fetchUsageBasedSpendCents sums chargedCents over the cycle's usage-based events.
+// GetAggregatedUsageEvents counts only spend included in the business plan; once a seat
+// runs past what is included, or uses a model billed on demand, those events are
+// USAGE_EVENT_KIND_USAGE_BASED and appear only in GetFilteredUsageEvents.
+func (c *CursorClient) fetchUsageBasedSpendCents(ctx context.Context, token string, start, end time.Time) (float64, error) {
+	var cents float64
+	seen := 0
+	for page := 1; page <= cursorUsageEventsMaxPages; page++ {
+		body, err := c.connectPost(ctx, token, "/aiserver.v1.DashboardService/GetFilteredUsageEvents", map[string]any{
+			"startDate": strconv.FormatInt(start.UnixMilli(), 10),
+			"endDate":   strconv.FormatInt(end.UnixMilli(), 10),
+			"page":      page,
+			"pageSize":  cursorUsageEventsPageSize,
+		})
+		if err != nil {
+			return 0, err
+		}
+		resp, err := ParseCursorFilteredUsageEventsResponse(body)
+		if err != nil {
+			return 0, err
+		}
+		for _, event := range resp.UsageEventsDisplay {
+			if event.Kind == CursorUsageEventKindUsageBased {
+				cents += event.ChargedCents
+			}
+		}
+		seen += len(resp.UsageEventsDisplay)
+		if len(resp.UsageEventsDisplay) == 0 || seen >= resp.TotalUsageEventsCount {
+			return cents, nil
+		}
+	}
+	return 0, fmt.Errorf("%w: usage events exceeded %d pages", ErrCursorInvalidResponse, cursorUsageEventsMaxPages)
 }
 
 func (c *CursorClient) fetchAggregatedUsageEvents(ctx context.Context, token string) (*CursorAggregatedUsageResponse, error) {
