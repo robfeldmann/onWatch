@@ -50,11 +50,12 @@ type CodexAgentManager struct {
 	pollingCheck        func() bool                 // Global Codex polling check
 	accountPollingCheck func(accountID int64) bool  // Per-account polling check
 	autoStartCheck      func(quotaName string) bool // Auto quota-starter enablement (per window)
-
-	mu        sync.RWMutex
-	instances map[string]*CodexAgentInstance // profile name -> instance
-	ctx       context.Context
-	cancel    context.CancelFunc
+	tokenCommand        CodexTokenRefreshFunc       // Optional command-backed default profile refresh
+	initialToken        string                      // Seed token for the command-backed default profile
+	mu                  sync.RWMutex
+	instances           map[string]*CodexAgentInstance // profile name -> instance
+	ctx                 context.Context
+	cancel              context.CancelFunc
 
 	// For detecting new profiles
 	profilesDir      string
@@ -82,6 +83,12 @@ func NewCodexAgentManager(store *store.Store, tracker *tracker.CodexTracker, int
 // SetProfilesDir sets the directory to scan for Codex profile files.
 func (m *CodexAgentManager) SetProfilesDir(dir string) {
 	m.profilesDir = dir
+}
+
+// SetTokenCommand configures command-backed token refresh for the default profile.
+func (m *CodexAgentManager) SetTokenCommand(fn CodexTokenRefreshFunc, initialToken string) {
+	m.tokenCommand = fn
+	m.initialToken = initialToken
 }
 
 // SetNotifier sets the notification engine for all agents.
@@ -477,6 +484,9 @@ func (m *CodexAgentManager) startAgentForProfile(profile CodexProfile) error {
 
 	agent.SetTokenRefresh(func() string {
 		if isDefaultProfile {
+			if m.tokenCommand != nil {
+				return m.tokenCommand()
+			}
 			if systemCreds := api.DetectCodexCredentials(m.logger); systemCreds != nil {
 				return systemCreds.AccessToken
 			}
@@ -513,59 +523,63 @@ func (m *CodexAgentManager) startAgentForProfile(profile CodexProfile) error {
 		return profile.Tokens.AccessToken
 	})
 
-	agent.SetCredentialsRefresh(func() *api.CodexCredentials {
-		if isDefaultProfile {
-			return api.DetectCodexCredentials(m.logger)
-		}
-
-		// Named profiles: prefer profile file, fall back to global auth.json
-		// only if account_id matches. Safe because refresh writes to profile file.
-		profileCreds := readCodexProfileCredentials(profilePath)
-		if profileCreds != nil && !profileCreds.IsExpiringSoon(codexTokenRefreshThreshold) {
-			return profileCreds
-		}
-
-		systemCreds := api.DetectCodexCredentials(m.logger)
-		if shouldUseSystemCredsForProfile(profileCreds, systemCreds, profile.AccountID, profile.UserID) {
-			if err := updateProfileFromSystemCreds(profilePath, systemCreds, m.logger); err != nil {
-				m.logger.Warn("failed to update Codex profile from auth.json", "error", err, "profile", profile.Name)
-			} else {
-				m.rememberProfileWrite(profile.Name, profilePath)
+	if m.tokenCommand == nil || !isDefaultProfile {
+		agent.SetCredentialsRefresh(func() *api.CodexCredentials {
+			if isDefaultProfile {
+				return api.DetectCodexCredentials(m.logger)
 			}
-			return systemCreds
-		}
 
-		return profileCreds
-	})
+			// Named profiles: prefer profile file, fall back to global auth.json
+			// only if account_id matches. Safe because refresh writes to profile file.
+			profileCreds := readCodexProfileCredentials(profilePath)
+			if profileCreds != nil && !profileCreds.IsExpiringSoon(codexTokenRefreshThreshold) {
+				return profileCreds
+			}
+
+			systemCreds := api.DetectCodexCredentials(m.logger)
+			if shouldUseSystemCredsForProfile(profileCreds, systemCreds, profile.AccountID, profile.UserID) {
+				if err := updateProfileFromSystemCreds(profilePath, systemCreds, m.logger); err != nil {
+					m.logger.Warn("failed to update Codex profile from auth.json", "error", err, "profile", profile.Name)
+				} else {
+					m.rememberProfileWrite(profile.Name, profilePath)
+				}
+				return systemCreds
+			}
+
+			return profileCreds
+		})
+	}
 
 	// Token save: named profiles write to their profile file, default writes to global auth.json.
 	// After writing, update lastScanProfiles so the profile scanner doesn't
 	// restart the agent for our own write.
-	agent.SetTokenSave(func(accessToken, refreshToken, idToken string, expiresIn int) error {
-		if isDefaultProfile {
-			// Write back to whichever file the credentials came from, in its
-			// native format. OpenCode-sourced tokens must stay in OpenCode
-			// format (one-time-use refresh tokens must not be lost).
-			source := api.CredentialSourceCodex
-			if cur := api.DetectCodexCredentials(m.logger); cur != nil {
-				source = cur.Source
+	if m.tokenCommand == nil || !isDefaultProfile {
+		agent.SetTokenSave(func(accessToken, refreshToken, idToken string, expiresIn int) error {
+			if isDefaultProfile {
+				// Write back to whichever file the credentials came from, in its
+				// native format. OpenCode-sourced tokens must stay in OpenCode
+				// format (one-time-use refresh tokens must not be lost).
+				source := api.CredentialSourceCodex
+				if cur := api.DetectCodexCredentials(m.logger); cur != nil {
+					source = cur.Source
+				}
+				return api.WriteCredentialsBySource(source, accessToken, refreshToken, idToken, expiresIn)
 			}
-			return api.WriteCredentialsBySource(source, accessToken, refreshToken, idToken, expiresIn)
-		}
 
-		// Named profiles: save refreshed tokens to the profile file only
-		if err := saveTokensToProfile(profilePath, accessToken, refreshToken, idToken, m.logger); err != nil {
-			return err
-		}
+			// Named profiles: save refreshed tokens to the profile file only
+			if err := saveTokensToProfile(profilePath, accessToken, refreshToken, idToken, m.logger); err != nil {
+				return err
+			}
 
-		// Update scanner's last-known mod time so it doesn't restart this agent
-		if info, statErr := os.Stat(profilePath); statErr == nil {
-			m.mu.Lock()
-			m.lastScanProfiles[profile.Name] = info.ModTime()
-			m.mu.Unlock()
-		}
-		return nil
-	})
+			// Update scanner's last-known mod time so it doesn't restart this agent
+			if info, statErr := os.Stat(profilePath); statErr == nil {
+				m.mu.Lock()
+				m.lastScanProfiles[profile.Name] = info.ModTime()
+				m.mu.Unlock()
+			}
+			return nil
+		})
+	}
 
 	// Set notifier if available
 	if m.notifier != nil {
@@ -630,7 +644,18 @@ func (m *CodexAgentManager) startAgentForProfile(profile CodexProfile) error {
 
 // startDefaultAgent starts an agent using current system credentials (no saved profile).
 func (m *CodexAgentManager) startDefaultAgent() error {
-	creds := api.DetectCodexCredentials(m.logger)
+	var creds *api.CodexCredentials
+	if m.tokenCommand != nil {
+		token := m.initialToken
+		if token == "" {
+			token = m.tokenCommand()
+		}
+		if token != "" {
+			creds = &api.CodexCredentials{AccessToken: token}
+		}
+	} else {
+		creds = api.DetectCodexCredentials(m.logger)
+	}
 	if creds == nil || (creds.AccessToken == "" && creds.APIKey == "") {
 		return fmt.Errorf("no Codex credentials found")
 	}

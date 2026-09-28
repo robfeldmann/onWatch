@@ -28,6 +28,7 @@ Or add it to your `.env` file:
 ```
 CURSOR_TOKEN=your_cursor_access_token
 ```
+For secret-manager-backed tokens, use `CURSOR_TOKEN_COMMAND`; see the [Token Command Setup Guide](TOKEN_COMMAND_SETUP.md).
 
 ## Token Refresh
 
