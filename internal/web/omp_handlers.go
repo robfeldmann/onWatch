@@ -60,35 +60,14 @@ func (h *Handler) ompAccounts(r *http.Request) ([]store.OMPAccount, int, error) 
 	return nil, http.StatusNotFound, fmt.Errorf("unknown account")
 }
 
-// ompSourceProviderLabels names the broker's provider ids for display.
-var ompSourceProviderLabels = map[string]string{
-	"anthropic":    "Anthropic",
-	"cursor":       "Cursor",
-	"openai-codex": "Codex",
-	"opencode-go":  "OpenCode Go",
-}
-
-// ompProviderLabel returns the display name of a broker provider id, title
-// casing ids it does not know ("kimi-code" -> "Kimi Code").
-func ompProviderLabel(id string) string {
-	if label, ok := ompSourceProviderLabels[id]; ok {
-		return label
-	}
-	parts := strings.FieldsFunc(id, func(r rune) bool { return r == '-' || r == '_' })
-	for i, p := range parts {
-		parts[i] = strings.ToUpper(p[:1]) + p[1:]
-	}
-	return strings.Join(parts, " ")
-}
-
 func ompAccountMap(acc store.OMPAccount) map[string]interface{} {
-	providerLabel := ompProviderLabel(acc.SourceProvider)
+	providerLabel := acc.ProviderLabel()
 	return map[string]interface{}{
 		"accountId":         acc.ID,
 		"key":               acc.Key,
 		"sourceProvider":    acc.SourceProvider,
 		"providerLabel":     providerLabel,
-		"label":             providerLabel + " · " + acc.Identity,
+		"label":             acc.Label(),
 		"identity":          acc.Identity,
 		"email":             acc.Email,
 		"upstreamAccountId": acc.AccountID,
@@ -429,7 +408,7 @@ func (h *Handler) insightsOMP(w http.ResponseWriter, r *http.Request) {
 		if snap == nil {
 			continue
 		}
-		accountLabel := ompProviderLabel(acc.SourceProvider) + " · " + acc.Identity
+		accountLabel := acc.Label()
 		if len(snap.Limits) == 0 && len(snap.Notes) > 0 {
 			key := fmt.Sprintf("omp_notes_%d", acc.ID)
 			if !hidden[key] {
@@ -447,7 +426,7 @@ func (h *Handler) insightsOMP(w http.ResponseWriter, r *http.Request) {
 			tracked++
 			label := l.Label
 			if multi {
-				label = ompProviderLabel(acc.SourceProvider) + " " + l.Label
+				label = acc.ProviderLabel() + " " + l.Label
 			}
 			if tracked == 1 || *l.Utilization > topUtil {
 				topUtil, topLabel = *l.Utilization, label

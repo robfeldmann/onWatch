@@ -47,6 +47,31 @@ type OMPAccount struct {
 	LastFetchedAt  *time.Time // fetched_at of the newest stored snapshot
 }
 
+// ProviderLabel is the display name of the account's source provider.
+func (a OMPAccount) ProviderLabel() string {
+	return api.OMPProviderLabel(a.SourceProvider)
+}
+
+// Label is the account's display label, "<provider label> · <identity>",
+// shared by the dashboard, the menubar, alerts and metrics.
+func (a OMPAccount) Label() string {
+	return a.ProviderLabel() + " · " + a.Identity
+}
+
+// GetOMPAccount returns one non-deleted omp account by id, or nil.
+func (s *Store) GetOMPAccount(id int64) (*OMPAccount, error) {
+	accounts, err := s.QueryOMPAccounts()
+	if err != nil {
+		return nil, err
+	}
+	for i := range accounts {
+		if accounts[i].ID == id {
+			return &accounts[i], nil
+		}
+	}
+	return nil, nil
+}
+
 // ompAccountMetadata is the provider_accounts.metadata JSON of an omp account.
 type ompAccountMetadata struct {
 	SourceProvider string `json:"source_provider"`
