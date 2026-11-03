@@ -49,16 +49,33 @@ History starts when the provider is first enabled. Past broker data is not impor
 
 ---
 
-## Dashboard and API
+## Dashboard
 
-The dashboard has no OMP tab yet. The data is available from the JSON API with `provider=omp`:
+The **OMP** tab shows every broker account:
+
+- **Account picker** - *All accounts* groups the limit cards under one heading per account (provider, email, organisation, plan, and when the broker last fetched it). Picking an account narrows the cards, the usage chart and the insights to it. The choice is remembered in the browser.
+- **Limit cards** - spend limits show dollars (`$34.45 / $250.00`) under the percentage; percent windows show the window (`5 Hour window`). The bar takes the status colour, the badge reads *Exhausted* when the broker says so, and the countdown runs to the next reset. An account without limits shows the broker's notes instead (for example a withheld Cursor team limit).
+- **Usage Graphs** - one line per limit (per account and limit in *All accounts*).
+- **Usage Samples** - every stored report of the selected account. Hidden in *All accounts*.
+- **All tab** - one OMP card with a compact summary per account; a summary opens the OMP tab on that account.
+
+The tab has no session history and no cross-limit cycle overview.
+
+## API
+
+The same data is available from the JSON API with `provider=omp`:
 
 | Endpoint | Returns |
 |---|---|
-| `/api/current?provider=omp` | The newest snapshot of every account |
-| `/api/history?provider=omp&range=6h[&account=ID]` | Per-account utilization series, keyed by limit id |
+| `/api/current?provider=omp` | The newest snapshot of every account (the `account` parameter is ignored) |
+| `/api/history?provider=omp&range=6h[&account=ID]` | Per-account utilization series, keyed by limit id, with `labels` mapping limit ids to labels |
 | `/api/cycles?provider=omp&account=ID&type=LIMIT_ID` | Reset cycles of one limit, active first |
 | `/api/summary?provider=omp[&account=ID]` | Per-account, per-limit cycle statistics |
+| `/api/insights?provider=omp[&account=ID]` | Highest usage, tracked limits and next reset; insights for limits at warning or above and for accounts whose limits are withheld |
+| `/api/logging-history?provider=omp&account=ID` | The account's stored samples (`quotaNames` = limit ids, `quotaLabels` = their labels); empty without `account` |
+| `/api/cycle-overview?provider=omp` | Always empty |
+
+`/api/current?provider=both` includes the same `omp` payload as `/api/current?provider=omp`.
 
 `/api/current?provider=omp` returns:
 
@@ -71,6 +88,8 @@ The dashboard has no OMP tab yet. The data is available from the JSON API with `
       "accountId": 3,
       "key": "anthropic:me@example.com",
       "sourceProvider": "anthropic",
+      "providerLabel": "Anthropic",
+      "label": "Anthropic · me@example.com",
       "identity": "me@example.com",
       "email": "me@example.com",
       "upstreamAccountId": "acct-0000",
@@ -114,7 +133,7 @@ The dashboard has no OMP tab yet. The data is available from the JSON API with `
 - `isStale` is true when the newest report is older than 30 minutes, for example an account the broker no longer reports.
 - `currentRate` (percentage points per hour) and `projectedUtil` appear for limits with a utilization once a cycle is tracked.
 
-`/api/history` returns `{"accounts": [{...account fields, "points": [{"fetchedAt": "...", "values": {"anthropic:5h": 13, ...}}]}]}` with at most 500 points per account. `/api/summary` returns `{"accounts": [{...account fields, "limits": {"anthropic:5h": {"currentUtil", "currentRate", "projectedUtil", "completedCycles", "peakCycle", "avgPerCycle", "totalTracked", "trackingSince", "resetsAt", "timeUntilReset"}}}]}`.
+`/api/history` returns `{"accounts": [{...account fields, "labels": {"anthropic:5h": "Claude 5 Hour", ...}, "points": [{"fetchedAt": "...", "values": {"anthropic:5h": 13, ...}}]}]}` with at most 500 points per account. `/api/summary` returns `{"accounts": [{...account fields, "limits": {"anthropic:5h": {"currentUtil", "currentRate", "projectedUtil", "completedCycles", "peakCycle", "avgPerCycle", "totalTracked", "trackingSince", "resetsAt", "timeUntilReset"}}}]}`.
 
 ---
 
