@@ -1031,6 +1031,58 @@ func (s *Store) createTables() error {
 		CREATE INDEX IF NOT EXISTS idx_commandcode_cycles_name_start ON commandcode_reset_cycles(quota_name, cycle_start);
 		CREATE INDEX IF NOT EXISTS idx_commandcode_cycles_name_active ON commandcode_reset_cycles(quota_name, cycle_end) WHERE cycle_end IS NULL;
 
+		-- OMP auth broker tables. One provider_accounts row (provider 'omp')
+		-- per broker account; external_id is "<source provider>:<identity>".
+		-- A snapshot is stored only when the broker's fetched_at changes, which
+		-- the unique (account_id, fetched_at) index enforces. Amounts and
+		-- utilization are NULL when the broker did not report them.
+		CREATE TABLE IF NOT EXISTS omp_snapshots (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			account_id INTEGER NOT NULL,
+			captured_at TEXT NOT NULL,
+			fetched_at TEXT NOT NULL,
+			source_provider TEXT NOT NULL,
+			notes TEXT NOT NULL DEFAULT '[]',
+			limit_count INTEGER NOT NULL DEFAULT 0
+		);
+
+		CREATE TABLE IF NOT EXISTS omp_quota_values (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			snapshot_id INTEGER NOT NULL,
+			account_id INTEGER NOT NULL,
+			limit_id TEXT NOT NULL,
+			label TEXT NOT NULL DEFAULT '',
+			window_id TEXT NOT NULL DEFAULT '',
+			window_label TEXT NOT NULL DEFAULT '',
+			window_duration_ms INTEGER,
+			used REAL,
+			limit_value REAL,
+			remaining REAL,
+			unit TEXT NOT NULL DEFAULT '',
+			utilization REAL,
+			status TEXT NOT NULL DEFAULT '',
+			resets_at TEXT,
+			notes TEXT NOT NULL DEFAULT '[]',
+			FOREIGN KEY (snapshot_id) REFERENCES omp_snapshots(id)
+		);
+
+		CREATE TABLE IF NOT EXISTS omp_reset_cycles (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			account_id INTEGER NOT NULL,
+			limit_id TEXT NOT NULL,
+			cycle_start TEXT NOT NULL,
+			cycle_end TEXT,
+			resets_at TEXT,
+			peak_utilization REAL NOT NULL DEFAULT 0,
+			total_delta REAL NOT NULL DEFAULT 0
+		);
+
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_omp_snapshots_account_fetched ON omp_snapshots(account_id, fetched_at);
+		CREATE INDEX IF NOT EXISTS idx_omp_quota_values_snapshot ON omp_quota_values(snapshot_id);
+		CREATE INDEX IF NOT EXISTS idx_omp_quota_values_account_limit ON omp_quota_values(account_id, limit_id);
+		CREATE INDEX IF NOT EXISTS idx_omp_cycles_account_limit_start ON omp_reset_cycles(account_id, limit_id, cycle_start);
+		CREATE INDEX IF NOT EXISTS idx_omp_cycles_active ON omp_reset_cycles(account_id, limit_id) WHERE cycle_end IS NULL;
+
 		-- Mistral tables. Quota amounts are NULL when Mistral only reports a
 		-- percentage, so an unknown amount is never recorded as zero. Billing
 		-- rows exist only when pay-as-you-go spend is actually known.

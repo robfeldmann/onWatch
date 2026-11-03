@@ -897,6 +897,18 @@ func run() error {
 		cfg.CursorTokenCommand = ""
 	}
 
+	// The OMP broker provider is enabled by OMP_BROKER_URL alone, so a failed
+	// token command does not disable it: the command runs again before every
+	// poll and after a 401, and the broker may simply not be up yet.
+	if cfg.OMPBrokerURL != "" && cfg.OMPBrokerTokenCommand != "" {
+		preflightLogger.Info("omp broker token source: command")
+		if token, err := api.RunTokenCommand(context.Background(), cfg.OMPBrokerTokenCommand); err != nil {
+			preflightLogger.Error("failed to run OMP broker token command", "error", err)
+		} else if cfg.OMPBrokerToken == "" {
+			cfg.OMPBrokerToken = token
+		}
+	}
+
 	// Grok provider auto-detect from ~/.grok/auth.json (or $GROK_HOME). Explicit GROK_TOKEN wins in config.
 	if os.Getenv("GROK_ENABLED") != "false" {
 		if creds := api.DetectGrokCredentials(preflightLogger); creds != nil && creds.AccessToken != "" {
@@ -1524,6 +1536,9 @@ func run() error {
 	// the tracker and its agent factory must exist even when no key is set at
 	// startup.
 	opencodeTr := tracker.NewOpenCodeTracker(db, logger)
+	// Always constructed: the OMP broker factory builds a fresh agent per
+	// start (a provider reload can enable it), and all of them share this.
+	ompTr := tracker.NewOMPTracker(db, logger)
 	var ollamaTr *tracker.OllamaTracker
 	if cfg.HasProvider("ollama") {
 		ollamaTr = tracker.NewOllamaTracker(db, logger)
@@ -1950,6 +1965,14 @@ func run() error {
 			notifier.Check(notify.QuotaStatus{Provider: "opencode", QuotaKey: quotaName, ResetOccurred: true})
 		})
 	}
+	ompTr.SetOnReset(func(accountID int64, limitID string) {
+		// AccountID matches the agent's threshold alerts: the account key.
+		accountKey := fmt.Sprintf("%d", accountID)
+		if acc, err := db.GetProviderAccountByID(accountID); err == nil && acc != nil {
+			accountKey = acc.Name
+		}
+		notifier.Check(notify.QuotaStatus{Provider: "omp", QuotaKey: limitID, AccountID: accountKey, ResetOccurred: true})
+	})
 	if ollamaTr != nil {
 		ollamaTr.SetOnReset(func(quotaName string) {
 			notifier.Check(notify.QuotaStatus{Provider: "ollama", QuotaKey: quotaName, ResetOccurred: true})
@@ -2015,6 +2038,7 @@ func run() error {
 	if opencodeTr != nil {
 		handler.SetOpenCodeTracker(opencodeTr)
 	}
+	handler.SetOMPTracker(ompTr)
 	if ollamaTr != nil {
 		handler.SetOllamaTracker(ollamaTr)
 	}
@@ -2118,6 +2142,24 @@ func run() error {
 	if commandCodeAg != nil {
 		agentMgr.RegisterFactory("commandcode", func() (agent.AgentRunner, error) { return commandCodeAg, nil })
 	}
+	// Like opencode, the OMP broker factory builds a fresh client and agent
+	// from a config snapshot on every start, so a reload that sets or changes
+	// OMP_BROKER_* applies without a daemon restart. The tracker is shared.
+	agentMgr.RegisterFactory("omp", func() (agent.AgentRunner, error) {
+		snapshot := cfg.Snapshot()
+		if snapshot.OMPBrokerURL == "" {
+			return nil, fmt.Errorf("omp: set OMP_BROKER_URL to poll the OMP auth broker")
+		}
+		ompClient := api.NewOMPClient(snapshot.OMPBrokerURL, snapshot.OMPBrokerToken, logger)
+		if snapshot.OMPBrokerTokenCommand != "" {
+			ompClient.SetTokenRefresh(api.TokenCommandRefresher(snapshot.OMPBrokerTokenCommand, logger))
+		}
+		ompSm := agent.NewSessionManager(db, "omp", idleTimeout, logger)
+		ag := agent.NewOMPAgent(ompClient, db, ompTr, snapshot.PollInterval, logger, ompSm)
+		ag.SetNotifier(notifier)
+		ag.SetPollingCheck(func() bool { return isPollingEnabled("omp") })
+		return ag, nil
+	})
 
 	if apiIntegrationsAg != nil {
 		agentMgr.RegisterFactory("api_integrations", func() (agent.AgentRunner, error) { return apiIntegrationsAg, nil })
@@ -2166,7 +2208,7 @@ func run() error {
 
 	// Start configured agents through the manager.
 	startedAny := false
-	for _, providerKey := range []string{"synthetic", "zai", "anthropic", "copilot", "codex", "antigravity", "minimax", "openrouter", "gemini", "cursor", "grok", "kimi", "moonshot", "deepseek", "opencode", "mistral", "ollama", "muse", "commandcode"} {
+	for _, providerKey := range []string{"synthetic", "zai", "anthropic", "copilot", "codex", "antigravity", "minimax", "openrouter", "gemini", "cursor", "grok", "kimi", "moonshot", "deepseek", "opencode", "mistral", "ollama", "muse", "commandcode", "omp"} {
 		if !isPollingEnabled(providerKey) {
 			continue
 		}
@@ -2742,6 +2784,16 @@ func printBanner(cfg *config.Config, version string) {
 		}
 		fmt.Printf("Gemini:            %s\n", source)
 	}
+	if cfg.HasProvider("omp") {
+		source := "no token"
+		switch {
+		case cfg.OMPBrokerTokenCommand != "":
+			source = "token command"
+		case cfg.OMPBrokerToken != "":
+			source = "token " + redactAPIKey(cfg.OMPBrokerToken)
+		}
+		fmt.Printf("OMP Broker:        %s (%s)\n", cfg.OMPBrokerURL, source)
+	}
 	fmt.Println()
 }
 
@@ -2802,6 +2854,9 @@ func printHelp() {
 	fmt.Println("  COMMANDCODE_ENABLED     Set false to disable the Command Code provider")
 	fmt.Println("  COMMANDCODE_BASE_URL    Command Code API base URL (default: https://api.commandcode.ai)")
 	fmt.Println("  COMMANDCODE_AUTH_PATH   Override the commandcode auth.json path")
+	fmt.Println("  OMP_BROKER_URL          OMP auth broker base URL; enables the omp provider")
+	fmt.Println("  OMP_BROKER_TOKEN        OMP auth broker bearer token")
+	fmt.Println("  OMP_BROKER_TOKEN_COMMAND Command printing the broker token (run before each poll)")
 	fmt.Println("  CODEX_HOME              Optional Codex auth directory (uses CODEX_HOME/auth.json)")
 	fmt.Println("  ONWATCH_POLL_INTERVAL   Polling interval in seconds")
 	fmt.Println("  ONWATCH_PORT            Dashboard HTTP port")

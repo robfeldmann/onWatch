@@ -118,6 +118,7 @@ type Handler struct {
 	grokTracker        *tracker.GrokTracker
 	kimiTracker        *tracker.KimiTracker
 	opencodeTracker    *tracker.OpenCodeTracker
+	ompTracker         *tracker.OMPTracker
 	ollamaTracker      *tracker.OllamaTracker
 	museTracker        *tracker.MuseTracker
 	commandCodeTracker *tracker.CommandCodeTracker
@@ -1304,6 +1305,7 @@ func providerCatalog() []providerCatalogItem {
 		{Key: "ollama", Name: "Ollama Cloud", Description: "Ollama Cloud included usage tracking", AutoDetectable: false},
 		{Key: "muse", Name: "Muse", Description: "Meta Muse coding-plan quota tracking", AutoDetectable: true},
 		{Key: "commandcode", Name: "Command Code", Description: "Command Code credit and rate-limit tracking", AutoDetectable: true},
+		{Key: "omp", Name: "OMP Broker", Description: "Every account held by the OMP auth broker", AutoDetectable: false},
 	}
 }
 
@@ -1392,6 +1394,8 @@ func (h *Handler) providerConfiguredFromConfig(provider string) (configured, nee
 			return false, false
 		}
 		return h.config.CommandCodeEnabled || strings.TrimSpace(h.config.CommandCodeAPIKey) != "", true
+	case "omp":
+		return strings.TrimSpace(h.config.OMPBrokerURL) != "", false
 	default:
 		return false, false
 	}
@@ -1686,6 +1690,9 @@ func applyProviderConfig(dst, src *config.Config) {
 	dst.CommandCodeEnabled = src.CommandCodeEnabled
 	dst.CommandCodeDisabled = src.CommandCodeDisabled
 	dst.CommandCodeBaseURL = src.CommandCodeBaseURL
+	dst.OMPBrokerURL = src.OMPBrokerURL
+	dst.OMPBrokerToken = src.OMPBrokerToken
+	dst.OMPBrokerTokenCommand = src.OMPBrokerTokenCommand
 	dst.AntigravityBaseURL = src.AntigravityBaseURL
 	dst.AntigravityCSRFToken = src.AntigravityCSRFToken
 	dst.AntigravityEnabled = src.AntigravityEnabled
@@ -2665,6 +2672,8 @@ func (h *Handler) Current(w http.ResponseWriter, r *http.Request) {
 		h.currentMuse(w, r)
 	case "commandcode":
 		h.currentCommandCode(w, r)
+	case "omp":
+		h.currentOMP(w, r)
 	default:
 		respondError(w, http.StatusBadRequest, fmt.Sprintf("unknown provider: %s", provider))
 	}
@@ -3589,6 +3598,8 @@ func (h *Handler) History(w http.ResponseWriter, r *http.Request) {
 		h.historyMuse(w, r)
 	case "commandcode":
 		h.historyCommandCode(w, r)
+	case "omp":
+		h.historyOMP(w, r)
 	default:
 		respondError(w, http.StatusBadRequest, fmt.Sprintf("unknown provider: %s", provider))
 	}
@@ -4782,6 +4793,8 @@ func (h *Handler) Cycles(w http.ResponseWriter, r *http.Request) {
 		h.cyclesMuse(w, r)
 	case "commandcode":
 		h.cyclesCommandCode(w, r)
+	case "omp":
+		h.cyclesOMP(w, r)
 	default:
 		respondError(w, http.StatusBadRequest, fmt.Sprintf("unknown provider: %s", provider))
 	}
@@ -5129,6 +5142,8 @@ func (h *Handler) Summary(w http.ResponseWriter, r *http.Request) {
 		h.summaryMuse(w, r)
 	case "commandcode":
 		h.summaryCommandCode(w, r)
+	case "omp":
+		h.summaryOMP(w, r)
 	default:
 		respondError(w, http.StatusBadRequest, fmt.Sprintf("unknown provider: %s", provider))
 	}

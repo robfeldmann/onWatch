@@ -52,6 +52,8 @@ func defaultProviderTabLabel(key string) string {
 		return "Command Code"
 	case "moonshot":
 		return "Moonshot"
+	case "omp":
+		return "OMP"
 	case "deepseek":
 		return "DeepSeek"
 	case "api-integrations":
@@ -296,6 +298,15 @@ func (h *Handler) saveDashboardProviderLabels(labels map[string]string) error {
 
 // filterDashboardProviders applies dashboard visibility, optional tools tab, and "both".
 func (h *Handler) filterDashboardProviders(providers []string) []string {
+	// The omp provider has API endpoints but no dashboard view yet; its tab
+	// would render another provider's layout, so it stays off the dashboard.
+	visible := make([]string, 0, len(providers))
+	for _, p := range providers {
+		if p != "omp" {
+			visible = append(visible, p)
+		}
+	}
+	providers = visible
 	if h.store != nil {
 		if visJSON, _ := h.store.GetSetting("provider_visibility"); visJSON != "" {
 			var vis map[string]map[string]bool

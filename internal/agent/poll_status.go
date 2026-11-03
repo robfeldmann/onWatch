@@ -245,7 +245,7 @@ var pollErrorClasses = []pollErrorClass{
 		api.ErrGeminiNetworkError, api.ErrGrokNetworkError, api.ErrKimiNetworkError,
 		api.ErrMiniMaxNetworkError, api.ErrMoonshotNetworkError, api.ErrMuseNetworkError,
 		api.ErrOllamaNetworkError, api.ErrOpenCodeNetworkError, api.ErrOpenRouterNetworkError,
-		api.ErrZaiNetworkError, api.ErrCommandCodeNetworkError,
+		api.ErrZaiNetworkError, api.ErrCommandCodeNetworkError, api.ErrOMPNetworkError,
 	}},
 	{PollOutcomeAuth, []error{
 		api.ErrUnauthorized, api.ErrAnthropicUnauthorized, api.ErrAnthropicForbidden,
@@ -257,13 +257,13 @@ var pollErrorClasses = []pollErrorClass{
 		api.ErrMuseUnauthorized, api.ErrOllamaUnauthorized, api.ErrOpenCodeUnauthorized,
 		api.ErrOpenCodeForbidden, api.ErrOpenRouterUnauthorized, api.ErrZaiUnauthorized,
 		api.ErrMistralAuth, api.ErrCommandCodeUnauthorized, api.ErrCodexRefreshTokenInvalid,
-		api.ErrCodexRefreshTokenReused, api.ErrOAuthInvalidGrant,
+		api.ErrCodexRefreshTokenReused, api.ErrOAuthInvalidGrant, api.ErrOMPUnauthorized,
 	}},
 	{PollOutcomeRateLimit, []error{
 		api.ErrAnthropicRateLimited, api.ErrOAuthRateLimited, api.ErrOpenCodeRateLimited,
 		api.ErrDeepSeekRateLimited, api.ErrKimiRateLimited, api.ErrMoonshotRateLimited,
 		api.ErrMuseRateLimited, api.ErrOllamaRateLimited, api.ErrOpenRouterRateLimited,
-		api.ErrCommandCodeRateLimited,
+		api.ErrCommandCodeRateLimited, api.ErrOMPRateLimited,
 	}},
 	{PollOutcomeParse, []error{
 		api.ErrInvalidResponse, api.ErrAnthropicInvalidResponse, api.ErrCodexInvalidResponse,
@@ -272,7 +272,7 @@ var pollErrorClasses = []pollErrorClass{
 		api.ErrKimiInvalidResponse, api.ErrMiniMaxInvalidResponse, api.ErrMoonshotInvalidResponse,
 		api.ErrMuseInvalidResponse, api.ErrOllamaInvalidResponse, api.ErrOpenCodeInvalidResponse,
 		api.ErrOpenCodeParseFailed, api.ErrOpenRouterInvalidResponse, api.ErrZaiInvalidResponse,
-		api.ErrMistralParse, api.ErrCommandCodeInvalidResponse,
+		api.ErrMistralParse, api.ErrCommandCodeInvalidResponse, api.ErrOMPInvalidResponse,
 	}},
 	{PollOutcomeUpstream, []error{
 		api.ErrServerError, api.ErrAnthropicServerError, api.ErrCodexServerError,
@@ -281,7 +281,7 @@ var pollErrorClasses = []pollErrorClass{
 		api.ErrKimiServerError, api.ErrMiniMaxServerError, api.ErrMiniMaxAccessBlocked,
 		api.ErrMoonshotServerError, api.ErrMuseServerError, api.ErrOllamaServerError,
 		api.ErrOpenCodeServerError, api.ErrOpenRouterServerError, api.ErrZaiServerError,
-		api.ErrZaiAPIError, api.ErrCommandCodeServerError,
+		api.ErrZaiAPIError, api.ErrCommandCodeServerError, api.ErrOMPServerError,
 	}},
 }
 
