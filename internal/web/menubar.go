@@ -599,6 +599,26 @@ func (h *Handler) buildMenubarProviders(settings *menubar.Settings, includeHidde
 		payload, readOK, hasData := h.buildCursorCurrentOK()
 		add(h.menubarResolveCard("cursor", resolveProviderTabLabel("cursor", labels), "", payload, readOK, hasData, normalized.WarningPercent, normalized.CriticalPercent, nil))
 	}
+	if h.config != nil && h.config.HasProvider("omp") && h.providerDashboardVisible("omp", visibility) {
+		// One card per broker account ("omp:<id>"), like Codex and MiniMax.
+		accounts, enumerated := h.ompMenubarAccounts()
+		if enumerated {
+			multi := len(accounts) > 1
+			for _, account := range accounts {
+				if !providerDashboardVisibleForKey(visibility, account.cardID, "omp") {
+					continue
+				}
+				attempted[account.cardID] = struct{}{}
+				label := menubarAccountLabel("omp", labels, account.label, multi)
+				add(h.menubarResolveCard(account.cardID, label, account.label, account.payload, true, account.hasData, normalized.WarningPercent, normalized.CriticalPercent, nil))
+			}
+		} else {
+			// The account list could not be read: keep the known cards.
+			for _, entry := range h.menubarCachedAccountCards("omp", attempted, visibility) {
+				add(entry.card, entry.captured)
+			}
+		}
+	}
 
 	sortProviderCards(providers, normalized.ProvidersOrder)
 	if !includeHidden {
