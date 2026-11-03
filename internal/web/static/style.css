@@ -4504,3 +4504,117 @@ body.accounts-overview-mode #sessions-section {
 .provider-intro-settings {
   margin-bottom: 20px;
 }
+
+/* ═══════════════════════════════════════════
+   OMP BROKER (multi-account tab)
+   ═══════════════════════════════════════════ */
+
+.omp-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.omp-account-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.omp-account-select {
+  min-width: 0;
+  max-width: 100%;
+  flex: 0 1 420px;
+  font: inherit;
+  font-size: 14px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-default);
+  background: var(--surface-card);
+  color: var(--text-primary);
+}
+.omp-account-select:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 1px;
+}
+.omp-accounts {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 28px;
+}
+.omp-account-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 12px;
+  margin: 4px 0 12px;
+}
+.omp-account-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+  min-width: 0;
+}
+.omp-account-identity {
+  font-weight: 500;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+.omp-account-meta {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.omp-account .quota-grid {
+  /* auto-fill keeps empty tracks, so an account with one limit gets one
+     card-width column instead of a full-width card. */
+  grid-template-columns: repeat(auto-fill, minmax(var(--layout-card-min), 1fr));
+  margin-bottom: 20px;
+}
+.omp-account-empty,
+.omp-account-notes {
+  padding: 14px 16px;
+  margin-bottom: 20px;
+  border-radius: var(--radius-md);
+  border: 1px dashed var(--border-default);
+  background: var(--surface-card-alt);
+}
+.omp-account-notes {
+  margin-bottom: 12px;
+  padding: 10px 14px;
+}
+.omp-note {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.omp-note + .omp-note {
+  margin-top: 4px;
+}
+.omp-card-notes {
+  margin-top: 10px;
+}
+.omp-card-notes .omp-note {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.omp-stale {
+  margin-left: 4px;
+  background: var(--accent-peach-light);
+  color: var(--accent-peach-text);
+}
+
+@media (max-width: 768px) {
+  .omp-account .quota-grid { grid-template-columns: 1fr; gap: 14px; }
+}
+
+@media (max-width: 480px) {
+  .omp-toolbar { flex-wrap: wrap; gap: 6px; }
+  .omp-account-select { flex: 1 1 100%; }
+  .omp-account-title { font-size: 15px; }
+}

@@ -3183,6 +3183,9 @@ func (h *Handler) currentBoth(w http.ResponseWriter, r *http.Request) {
 	if h.config.HasProvider("commandcode") && providerTelemetryEnabled(visibility, "commandcode") {
 		response["commandcode"] = h.buildCommandCodeCurrent()
 	}
+	if h.config.HasProvider("omp") && providerTelemetryEnabled(visibility, "omp") {
+		response["omp"] = h.buildOMPCurrent()
+	}
 	respondJSON(w, http.StatusOK, response)
 }
 
@@ -5982,6 +5985,8 @@ func (h *Handler) Insights(w http.ResponseWriter, r *http.Request) {
 		h.insightsMuse(w, r, rangeDur)
 	case "commandcode":
 		h.insightsCommandCode(w, r, rangeDur)
+	case "omp":
+		h.insightsOMP(w, r)
 	default:
 		respondError(w, http.StatusBadRequest, fmt.Sprintf("unknown provider: %s", provider))
 	}
@@ -8763,6 +8768,8 @@ func (h *Handler) CycleOverview(w http.ResponseWriter, r *http.Request) {
 		h.cycleOverviewMuse(w, r)
 	case "commandcode":
 		h.cycleOverviewCommandCode(w, r)
+	case "omp":
+		h.cycleOverviewOMP(w, r)
 	default:
 		respondError(w, http.StatusBadRequest, fmt.Sprintf("unknown provider: %s", provider))
 	}
@@ -12622,6 +12629,8 @@ func (h *Handler) LoggingHistory(w http.ResponseWriter, r *http.Request) {
 		h.loggingHistoryMuse(w, r)
 	case "commandcode":
 		h.loggingHistoryCommandCode(w, r)
+	case "omp":
+		h.loggingHistoryOMP(w, r)
 	default:
 		respondError(w, http.StatusBadRequest, fmt.Sprintf("unknown provider: %s", provider))
 	}
