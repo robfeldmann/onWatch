@@ -1,0 +1,95 @@
+{
+  "generatedAt": 1793744646004,
+  "reports": [
+    {
+      "provider": "cursor",
+      "fetchedAt": 1793744489412,
+      "metadata": { "email": "work@example.com" },
+      "limits": [
+        {
+          "id": "cursor:usd:individual-overall",
+          "label": "Personal Usage",
+          "scope": { "provider": "cursor", "windowId": "monthly" },
+          "window": { "id": "monthly", "label": "Monthly", "resetsAt": 1796083200000 },
+          "amount": {
+            "used": 34.44,
+            "limit": 250,
+            "remaining": 215.56,
+            "usedFraction": 0.13776,
+            "remainingFraction": 0.86224,
+            "unit": "usd"
+          },
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "provider": "cursor",
+      "fetchedAt": 1793744489412,
+      "metadata": { "email": "team@example.com" },
+      "notes": ["Team spend limit is withheld for this account"],
+      "limits": []
+    },
+    {
+      "provider": "anthropic",
+      "fetchedAt": 1793744490163,
+      "metadata": {
+        "email": "me@example.com",
+        "accountId": "acct-0000",
+        "orgId": "org-0000",
+        "orgName": "Example Org",
+        "endpoint": "https://example.invalid"
+      },
+      "resetCredits": { "availableCount": 0 },
+      "limits": [
+        {
+          "id": "anthropic:5h",
+          "label": "Claude 5 Hour",
+          "scope": { "provider": "anthropic", "windowId": "5h", "shared": true },
+          "window": { "id": "5h", "label": "5 Hour", "durationMs": 18000000, "resetsAt": 1793746200030 },
+          "amount": { "used": 13, "limit": 100, "remaining": 87, "usedFraction": 0.13, "remainingFraction": 0.87, "unit": "percent" },
+          "status": "ok"
+        },
+        {
+          "id": "anthropic:7d",
+          "label": "Claude 7 Day",
+          "scope": { "provider": "anthropic", "windowId": "7d", "shared": true },
+          "window": { "id": "7d", "label": "7 Day", "durationMs": 604800000, "resetsAt": 1794092400030 },
+          "amount": { "used": 31, "limit": 100, "remaining": 69, "unit": "percent" },
+          "status": "warning"
+        },
+        {
+          "id": "anthropic:7d:fable",
+          "label": "Claude 7 Day (Fable)",
+          "scope": { "provider": "anthropic", "windowId": "7d", "tier": "fable" },
+          "window": { "id": "7d", "label": "7 Day", "durationMs": 604800000, "resetsAt": 1794092400000 },
+          "amount": { "unit": "percent" },
+          "notes": ["Fable tier usage is not reported yet"]
+        }
+      ]
+    },
+    {
+      "provider": "openai-codex",
+      "fetchedAt": 1793744489412,
+      "metadata": {
+        "email": "me@example.com",
+        "accountId": "acct-1111",
+        "planType": "plus",
+        "allowed": true,
+        "limitReached": false,
+        "meterStates": {}
+      },
+      "resetCredits": { "availableCount": 1 },
+      "limits": [
+        {
+          "id": "openai-codex:primary",
+          "label": "30 days",
+          "scope": { "provider": "openai-codex", "windowId": "30d", "shared": true },
+          "window": { "id": "30d", "label": "30 days", "durationMs": 2592000000, "resetsAt": 1796336490000 },
+          "amount": { "used": 0, "limit": 100, "remaining": 100, "usedFraction": 0, "remainingFraction": 1, "unit": "percent" },
+          "status": "ok"
+        }
+      ]
+    }
+  ]
+}

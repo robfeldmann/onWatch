@@ -81,6 +81,7 @@ function getCurrentProvider() {
   if (museGrid) return 'muse';
   const commandCodeGrid = document.getElementById('quota-grid-commandcode');
   if (commandCodeGrid) return 'commandcode';
+  if (document.getElementById('quota-grid-omp')) return 'omp';
   const moonshotGrid = document.getElementById('quota-grid-moonshot');
   if (moonshotGrid) return 'moonshot';
   const deepseekGrid = document.getElementById('quota-grid-deepseek');
@@ -97,6 +98,8 @@ function providerParam() {
     param += codexAccountParam();
   } else if (provider === 'minimax') {
     param += minimaxAccountParam();
+  } else if (provider === 'omp') {
+    param += ompAccountParam();
   }
   return param;
 }
@@ -110,16 +113,17 @@ function isAccountsOverviewMode(provider = getCurrentProvider()) {
 }
 
 function shouldShowSessionsTable(provider = getCurrentProvider()) {
-  return provider !== 'both' && provider !== 'cursor' && provider !== 'api-integrations' && !isAccountsOverviewMode(provider);
+  return provider !== 'both' && provider !== 'cursor' && provider !== 'api-integrations' && provider !== 'omp' && !isAccountsOverviewMode(provider);
   // grok (like synthetic/codex/etc) shows sessions
 }
 
 function shouldShowCyclesTable(provider = getCurrentProvider()) {
+  if (provider === 'omp') return !isOMPAllAccounts();
   return provider !== 'both' && provider !== 'api-integrations';
 }
 
 function shouldShowOverviewTable(provider = getCurrentProvider()) {
-  return provider !== 'both' && provider !== 'gemini' && provider !== 'api-integrations';
+  return provider !== 'both' && provider !== 'gemini' && provider !== 'api-integrations' && provider !== 'omp';
 }
 
 function shouldShowHistoryTables(provider = getCurrentProvider()) {
@@ -185,6 +189,10 @@ const State = {
   overviewPageSize: 10,
   // Codex profile selection (multi-account beta)
   codexAccount: 1,
+  // OMP broker account selection: 'all' or a provider_accounts id
+  ompAccount: 'all',
+  ompAccounts: [],
+  ompLimitLabels: {},
   codexProfiles: [],
   codexPlanType: '',
   codexQuotaNames: [],
@@ -1351,6 +1359,7 @@ function getQuotaDisplayName(quotaKey, provider) {
     if (override) return override;
   }
   if (isAnthropicPerModelWeekly(quotaKey)) return anthropicQuotaLabel(quotaKey);
+  if (provider === 'omp' && State.ompLimitLabels[quotaKey]) return State.ompLimitLabels[quotaKey];
   // Fall back to generic display name
   return overviewQuotaDisplayNames[quotaKey] || quotaKey;
 };
@@ -4206,6 +4215,346 @@ function updateOpenCodeCard(quota) {
   }
 }
 
+// ── OMP broker (multi-account) ──
+// One tab for every account the OMP auth broker holds. "All accounts" groups
+// the limit cards per account; picking an account narrows the cards, chart,
+// insights and usage samples to it. /api/current?provider=omp always returns
+// every account, so the picker and the filter both come from one response.
+
+const ompChartPalette = [
+  { border: '#0D9488', bg: 'rgba(13, 148, 136, 0.06)' },
+  { border: '#F59E0B', bg: 'rgba(245, 158, 11, 0.06)' },
+  { border: '#3B82F6', bg: 'rgba(59, 130, 246, 0.06)' },
+  { border: '#EC4899', bg: 'rgba(236, 72, 153, 0.06)' },
+  { border: '#8B5CF6', bg: 'rgba(139, 92, 246, 0.06)' },
+  { border: '#10B981', bg: 'rgba(16, 185, 129, 0.06)' },
+  { border: '#EF4444', bg: 'rgba(239, 68, 68, 0.06)' },
+  { border: '#6366F1', bg: 'rgba(99, 102, 241, 0.06)' },
+];
+
+function isOMPAllAccounts() {
+  return State.ompAccount === 'all' || State.ompAccount == null;
+}
+
+function loadOMPAccount() {
+  State.ompAccount = 'all';
+  try {
+    const stored = localStorage.getItem('onwatch-omp-account');
+    const parsed = parseInt(stored, 10);
+    if (stored && stored !== 'all' && !isNaN(parsed)) State.ompAccount = parsed;
+  } catch (e) {
+    // storage unavailable: show all accounts
+  }
+}
+
+function saveOMPAccount(id) {
+  try {
+    localStorage.setItem('onwatch-omp-account', String(id));
+  } catch (e) {
+    // storage unavailable: the choice lasts for this page only
+  }
+}
+
+function ompAccountParam() {
+  return isOMPAllAccounts() ? '' : `&account=${encodeURIComponent(State.ompAccount)}`;
+}
+
+// Usage samples are per account, and the cross-limit cycle overview does not
+// apply to broker accounts, so those sections follow the account picker.
+function syncOMPSections() {
+  if (getCurrentProvider() !== 'omp') return;
+  const cycles = document.querySelector('.cycles-section');
+  if (cycles) cycles.style.display = isOMPAllAccounts() ? 'none' : '';
+  const overview = document.querySelector('.cycle-overview-section');
+  if (overview) overview.style.display = 'none';
+}
+
+function initOMPAccountPicker() {
+  const select = document.getElementById('omp-account-select');
+  if (!select) return;
+  loadOMPAccount();
+  select.addEventListener('change', () => {
+    const value = select.value;
+    State.ompAccount = value === 'all' ? 'all' : parseInt(value, 10);
+    saveOMPAccount(State.ompAccount);
+    syncOMPSections();
+    // refreshAll loads the samples now; auto-refresh keeps them current.
+    if (!isOMPAllAccounts()) _lazyLoaded.add('.cycles-section');
+    refreshAll();
+  });
+  syncOMPSections();
+}
+
+function ompAccountOptionLabel(acc) {
+  return acc.orgName ? `${acc.label} (${acc.orgName})` : acc.label;
+}
+
+function updateOMPAccountOptions(accounts) {
+  const select = document.getElementById('omp-account-select');
+  if (!select) return;
+  const signature = accounts.map(a => `${a.accountId}:${ompAccountOptionLabel(a)}`).join('|');
+  if (select.dataset.signature !== signature) {
+    select.innerHTML = '<option value="all">All accounts</option>' + accounts
+      .map(a => `<option value="${a.accountId}">${escapeHTML(ompAccountOptionLabel(a))}</option>`)
+      .join('');
+    select.dataset.signature = signature;
+  }
+  // A remembered account the broker no longer reports falls back to all.
+  if (!isOMPAllAccounts() && accounts.length > 0 && !accounts.some(a => a.accountId === State.ompAccount)) {
+    State.ompAccount = 'all';
+    saveOMPAccount('all');
+    syncOMPSections();
+  }
+  select.value = String(State.ompAccount);
+}
+
+function ompDomKey(accountId, limitId) {
+  return `omp-${accountId}-${String(limitId).replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+}
+
+function ompAmount(value, unit) {
+  if (value == null || !Number.isFinite(value)) return '--';
+  if (unit === 'usd') return '$' + value.toFixed(2);
+  if (unit === 'percent') return `${Math.round(value * 10) / 10}%`;
+  return Number(value).toLocaleString(undefined, { maximumFractionDigits: 2 });
+}
+
+// The line under the big percentage: dollars for USD limits, the window for
+// percent limits, used / limit with the unit otherwise.
+function ompLimitFraction(limit) {
+  if (limit.unit === 'percent') return limit.windowLabel ? `${limit.windowLabel} window` : 'Utilization';
+  if (limit.used == null && limit.limit == null) return 'Not reported';
+  const unit = limit.unit === 'usd' || !limit.unit || limit.unit === 'unknown' ? '' : ` ${limit.unit}`;
+  if (limit.limit == null) return ompAmount(limit.used, limit.unit) + unit;
+  return `${ompAmount(limit.used, limit.unit)} / ${ompAmount(limit.limit, limit.unit)}${unit}`;
+}
+
+function ompAgeText(seconds) {
+  if (!Number.isFinite(seconds) || seconds < 60) return 'just now';
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+  return `${Math.floor(seconds / 86400)}d ago`;
+}
+
+function ompNotesHTML(notes) {
+  return notes.map(n => `<p class="omp-note">${escapeHTML(n)}</p>`).join('');
+}
+
+function ompCardHTML(acc, limit, delay) {
+  const key = ompDomKey(acc.accountId, limit.id);
+  const notes = Array.isArray(limit.notes) ? limit.notes : [];
+  return `<article class="quota-card omp-card" data-quota="${escapeHTML(limit.id)}" data-account="${acc.accountId}" data-provider="omp" style="animation-delay: ${delay * 60}ms">
+      <header class="card-header">
+        <h2 class="quota-title">
+          <svg class="quota-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          ${escapeHTML(limit.label)}
+        </h2>
+        <span class="countdown" id="countdown-${key}">--:--</span>
+      </header>
+      <div class="progress-stats">
+        <span class="usage-percent" id="percent-${key}">--</span>
+        <span class="usage-fraction" id="fraction-${key}"></span>
+      </div>
+      <div class="progress-wrapper">
+        <div class="progress-bar" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" aria-label="${escapeHTML(limit.label)} usage">
+          <div class="progress-fill" id="progress-${key}" style="width: 0%" data-status="healthy"></div>
+        </div>
+      </div>
+      <footer class="card-footer">
+        <span class="status-badge" id="status-${key}" data-status="healthy"></span>
+        <span class="reset-time" id="reset-${key}"></span>
+      </footer>
+      ${notes.length ? `<div class="omp-card-notes">${ompNotesHTML(notes)}</div>` : ''}
+    </article>`;
+}
+
+function ompAccountHTML(acc, index) {
+  const limits = Array.isArray(acc.limits) ? acc.limits : [];
+  const notes = Array.isArray(acc.notes) ? acc.notes : [];
+  const body = limits.length > 0
+    ? `<div class="quota-grid omp-account-grid">${limits.map((l, j) => ompCardHTML(acc, l, index * 3 + j)).join('')}</div>`
+    : `<div class="omp-account-empty">${notes.length ? ompNotesHTML(notes) : '<p class="omp-note">The broker reports no limits for this account.</p>'}</div>`;
+  const accountNotes = limits.length > 0 && notes.length > 0 ? `<div class="omp-account-notes">${ompNotesHTML(notes)}</div>` : '';
+  return `<section class="omp-account" data-account="${acc.accountId}">
+      <header class="omp-account-header">
+        <h2 class="omp-account-title">
+          <span class="omp-account-provider">${escapeHTML(acc.providerLabel || acc.sourceProvider)}</span>
+          <span class="omp-account-identity">${escapeHTML(acc.identity)}</span>
+        </h2>
+        <span class="omp-account-meta" id="omp-meta-${acc.accountId}"></span>
+      </header>
+      ${accountNotes}
+      ${body}
+    </section>`;
+}
+
+function updateOMPAccountMeta(acc) {
+  const el = document.getElementById(`omp-meta-${acc.accountId}`);
+  if (!el) return;
+  const parts = [];
+  if (acc.orgName) parts.push(escapeHTML(acc.orgName));
+  if (acc.planType) parts.push(escapeHTML(toTitleCase(acc.planType)));
+  parts.push(`Updated ${ompAgeText(acc.ageSeconds)}`);
+  el.innerHTML = parts.join(' · ') + (acc.isStale ? ' <span class="badge omp-stale">Stale</span>' : '');
+  el.title = acc.fetchedAt ? `Broker fetched ${formatDateTime(acc.fetchedAt)}` : '';
+}
+
+function updateOMPCard(acc, limit) {
+  const key = ompDomKey(acc.accountId, limit.id);
+  const prev = State.currentQuotas[key];
+  const hasPct = Number.isFinite(limit.utilization);
+  const pct = hasPct ? limit.utilization : 0;
+  const status = limit.status || 'healthy';
+  State.currentQuotas[key] = {
+    percent: pct,
+    status,
+    renewsAt: limit.resetsAt,
+    timeUntilResetSeconds: limit.timeUntilResetSeconds || 0,
+    name: limit.id,
+    displayName: limit.label,
+  };
+
+  const percentEl = document.getElementById(`percent-${key}`);
+  if (percentEl) {
+    if (!hasPct) {
+      percentEl.textContent = '--';
+    } else if (prev && Math.abs(prev.percent - pct) > 0.2) {
+      animateValue(percentEl, prev.percent, pct, 400, v => `${v.toFixed(1)}%`);
+    } else {
+      percentEl.textContent = `${pct.toFixed(1)}%`;
+    }
+  }
+  const fractionEl = document.getElementById(`fraction-${key}`);
+  if (fractionEl) fractionEl.textContent = ompLimitFraction(limit);
+  const progressEl = document.getElementById(`progress-${key}`);
+  if (progressEl) {
+    progressEl.style.width = `${Math.max(0, Math.min(100, pct))}%`;
+    progressEl.setAttribute('data-status', status);
+    if (progressEl.parentElement) progressEl.parentElement.setAttribute('aria-valuenow', Math.round(pct));
+  }
+  const statusEl = document.getElementById(`status-${key}`);
+  if (statusEl) {
+    const cfg = statusConfig[status] || statusConfig.healthy;
+    const upstream = String(limit.upstreamStatus || '');
+    const label = upstream === 'exhausted' ? 'Exhausted' : (hasPct ? cfg.label : 'No data');
+    statusEl.setAttribute('data-status', status);
+    statusEl.title = upstream ? `Broker status: ${upstream}` : '';
+    statusEl.innerHTML = `<svg class="status-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="${cfg.icon}"/></svg>${escapeHTML(label)}`;
+  }
+  const resetEl = document.getElementById(`reset-${key}`);
+  if (resetEl) {
+    if (limit.resetsAt) {
+      resetEl.setAttribute('data-reset-at', limit.resetsAt);
+      resetEl.textContent = formatResetTime(limit.resetsAt);
+    } else {
+      resetEl.removeAttribute('data-reset-at');
+      resetEl.textContent = '';
+    }
+  }
+  const countdownEl = document.getElementById(`countdown-${key}`);
+  if (countdownEl) {
+    if (limit.timeUntilResetSeconds > 0) {
+      countdownEl.textContent = formatDuration(limit.timeUntilResetSeconds);
+      countdownEl.classList.toggle('imminent', limit.timeUntilResetSeconds < 1800);
+      countdownEl.style.display = '';
+    } else {
+      countdownEl.style.display = 'none';
+    }
+  }
+  return key;
+}
+
+// renderOMPAccounts rebuilds the account groups only when the set of shown
+// accounts or their limits changes (the OpenCode cards pattern); otherwise it
+// updates values in place so cards keep their position and animations.
+function renderOMPAccounts(data) {
+  const container = document.getElementById('quota-grid-omp');
+  if (!container) return;
+  const all = Array.isArray(data && data.accounts) ? data.accounts : [];
+  updateOMPAccountOptions(all);
+  all.forEach(acc => (acc.limits || []).forEach(l => {
+    State.ompLimitLabels[l.id] = l.label;
+    State.ompLimitLabels[`${acc.accountId}|${l.id}`] = l.label;
+  }));
+  State.ompAccounts = all;
+
+  const accounts = isOMPAllAccounts() ? all : all.filter(a => a.accountId === State.ompAccount);
+  const signature = (isOMPAllAccounts() ? 'all|' : 'one|') + accounts
+    .map(a => `${a.accountId}[${(a.limits || []).map(l => l.id).join(',')}]n${(a.notes || []).length}`)
+    .join('|');
+  if (container.dataset.signature !== signature) {
+    container.dataset.signature = signature;
+    container.innerHTML = accounts.length > 0
+      ? accounts.map((acc, i) => ompAccountHTML(acc, i)).join('')
+      : '<p class="empty-state">No OMP broker accounts yet. They appear after the first successful poll.</p>';
+  }
+
+  const shown = new Set();
+  accounts.forEach(acc => {
+    updateOMPAccountMeta(acc);
+    (acc.limits || []).forEach(l => shown.add(updateOMPCard(acc, l)));
+  });
+  Object.keys(State.currentQuotas).forEach(key => {
+    if (key.startsWith('omp-') && !shown.has(key)) delete State.currentQuotas[key];
+  });
+}
+
+// buildOMPHistoryDatasets turns /api/history?provider=omp into one line per
+// limit (per account and limit in the all-accounts view).
+function buildOMPHistoryDatasets(data, range) {
+  const accounts = Array.isArray(data && data.accounts) ? data.accounts : [];
+  const multi = accounts.length > 1;
+  const datasets = [];
+  accounts.forEach(acc => {
+    const points = Array.isArray(acc.points) ? acc.points : [];
+    const limitIds = [];
+    points.forEach(p => Object.keys(p.values || {}).forEach(id => {
+      if (!limitIds.includes(id)) limitIds.push(id);
+    }));
+    const who = String(acc.identity || '').split('@')[0];
+    limitIds.forEach(id => {
+      const color = ompChartPalette[datasets.length % ompChartPalette.length];
+      const label = (acc.labels && acc.labels[id]) || State.ompLimitLabels[`${acc.accountId}|${id}`] || State.ompLimitLabels[id] || id;
+      const rawData = points
+        .filter(p => Number.isFinite(p.values && p.values[id]))
+        .map(p => ({ x: new Date(p.fetchedAt), y: p.values[id] }));
+      const processed = processDataWithGaps(rawData, range);
+      datasets.push({
+        label: multi ? `${acc.providerLabel || acc.sourceProvider} ${who}: ${label}` : label,
+        data: processed.data,
+        borderColor: color.border,
+        backgroundColor: color.bg,
+        fill: true,
+        tension: 0.4,
+        borderWidth: 2,
+        pointRadius: processed.pointRadii,
+        pointHoverRadius: 4,
+        spanGaps: true,
+        segment: getSegmentStyle(processed.gapSegments, color.border),
+      });
+    });
+  });
+  return datasets;
+}
+
+// ompBothEntries groups every broker account into one all-providers card of
+// compact account summaries (the Codex/MiniMax accountsGroup layout); a card
+// opens the OMP tab on that account.
+function ompBothEntries(payload) {
+  const accounts = Array.isArray(payload && payload.accounts) ? payload.accounts : [];
+  if (accounts.length === 0) return [];
+  return [{
+    provider: 'omp',
+    cardKey: sanitizeProviderCardKey('omp'),
+    title: bothProviderNames.omp,
+    badge: accounts.length === 1 ? '1 account' : `${accounts.length} accounts`,
+    accountsGroup: accounts.map(acc => ({
+      ...acc,
+      accountName: acc.orgName ? `${acc.label} (${acc.orgName})` : acc.label,
+    })),
+  }];
+}
+
 
 
 // ── Ollama Cloud Card Rendering ──
@@ -4856,6 +5205,8 @@ async function fetchCurrent() {
         }
       } else if (provider === 'mistral') {
         renderMistralCards(data);
+      } else if (provider === 'omp') {
+        renderOMPAccounts(data);
       } else if (provider === 'opencode') {
         if (data.quotas) {
           const container = document.getElementById('quota-grid-opencode');
@@ -5043,6 +5394,15 @@ function accountOverviewQuotas(provider, account) {
       resetAt: q.resetAt || null,
     }));
   }
+  if (provider === 'omp') {
+    return (account.limits || []).map(l => ({
+      label: l.label,
+      quotaName: l.id,
+      percent: Number.isFinite(l.utilization) ? l.utilization : 0,
+      status: l.status || 'healthy',
+      resetAt: l.resetsAt || null,
+    }));
+  }
   const visible = filterCodexQuotasForPlan(account.quotas || [], account.planType);
   return visible.map(q => ({
     label: q.displayName || codexDisplayNames[q.name] || q.name,
@@ -5061,7 +5421,9 @@ function accountOverviewCardHTML(provider, account, idx) {
     ? formatCodexPlan(account.planType, account.planLabel) : '';
   const rows = accountOverviewQuotas(provider, account);
   const quotaHTML = rows.length === 0
-    ? '<p class="empty-state">No quota data yet.</p>'
+    ? (provider === 'omp' && Array.isArray(account.notes) && account.notes.length
+      ? ompNotesHTML(account.notes)
+      : '<p class="empty-state">No quota data yet.</p>')
     : rows.map(r => {
         const pct = Math.max(0, Math.min(100, r.percent)).toFixed(1);
         const reset = r.resetAt ? formatResetTime(r.resetAt) : '';
@@ -5947,6 +6309,8 @@ function initChart() {
     defaultDatasets = []; // Kimi datasets are dynamic - populated when history data arrives
   } else if (provider === 'mistral') {
     defaultDatasets = [];
+  } else if (provider === 'omp') {
+    defaultDatasets = []; // OMP datasets are per account and limit
   } else if (provider === 'opencode') {
     defaultDatasets = []; // OpenCode datasets are dynamic
   } else if (provider === 'ollama') {
@@ -6139,6 +6503,9 @@ function historyBodyError(provider, data) {
     if (Array.isArray(data) || (!Array.isArray(data.labels) && !Array.isArray(data.datasets))) return 'invalid body';
     return '';
   }
+  if (provider === 'omp') {
+    return Array.isArray(data.accounts) ? '' : 'invalid body';
+  }
   return Array.isArray(data) ? '' : 'invalid body';
 }
 
@@ -6154,6 +6521,7 @@ function warnHistoryFailure(provider, range, reason, status) {
 function chartAccountKey(provider) {
   if (provider === 'codex') return State.codexAccount == null ? null : State.codexAccount;
   if (provider === 'minimax') return State.minimaxAccount == null ? null : State.minimaxAccount;
+  if (provider === 'omp') return State.ompAccount == null ? null : State.ompAccount;
   return null;
 }
 
@@ -6438,6 +6806,16 @@ async function fetchHistory(range) {
         datasets.push(mainDataset);
       });
       State.chart.data.datasets = datasets;
+      updateTimeScale(State.chart, range);
+      State.chartYMax = computeYMax(State.chart.data.datasets, State.chart);
+      State.chart.options.scales.y.max = State.chartYMax;
+      State.chart.update();
+      recordChartRendered(provider, range);
+      return;
+    }
+
+    if (provider === 'omp') {
+      State.chart.data.datasets = buildOMPHistoryDatasets(data, range);
       updateTimeScale(State.chart, range);
       State.chartYMax = computeYMax(State.chart.data.datasets, State.chart);
       State.chart.options.scales.y.max = State.chartYMax;
@@ -6953,6 +7331,7 @@ const bothProviderNames = {
   ollama: 'Ollama',
   muse: 'Muse',
   commandcode: 'Command Code',
+  omp: 'OMP',
   'api-integrations': 'API Integrations',
 };
 
@@ -7139,6 +7518,11 @@ function buildAllProviderEntries() {
   const entries = [];
 
   const addProviderEntry = (provider) => {
+    if (provider === 'omp') {
+      if (!isProviderTelemetryEnabled('omp')) return;
+      entries.push(...ompBothEntries(current.omp));
+      return;
+    }
     if (provider === 'api-integrations') {
       const payload = current.apiIntegrations;
       if (!payload || State.apiIntegrationsVisibility?.dashboard === false) return;
@@ -7998,6 +8382,7 @@ function renderAllProvidersView() {
     const accountId = parseInt(card.dataset.accountId, 10);
     const go = () => {
       if (provider === 'minimax') saveMiniMaxAccount(accountId);
+      else if (provider === 'omp') saveOMPAccount(accountId);
       else saveCodexAccount(accountId);
       saveDefaultProvider(provider);
       window.location.href = `${BASE_PATH}/?provider=${provider}`;
@@ -8407,7 +8792,7 @@ async function fetchCycles() {
   const requestSeq = (State.cyclesRequestSeq || 0) + 1;
   State.cyclesRequestSeq = requestSeq;
   const provider = requestProvider;
-  const loggingHistoryProviders = new Set(['synthetic', 'zai', 'anthropic', 'copilot', 'codex', 'antigravity', 'minimax', 'gemini', 'cursor', 'grok', 'kimi', 'mistral', 'opencode', 'ollama', 'muse', 'commandcode', 'moonshot', 'deepseek']);
+  const loggingHistoryProviders = new Set(['synthetic', 'zai', 'anthropic', 'copilot', 'codex', 'antigravity', 'minimax', 'gemini', 'cursor', 'grok', 'kimi', 'mistral', 'opencode', 'ollama', 'muse', 'commandcode', 'moonshot', 'deepseek', 'omp']);
 
   // All-accounts overview: fetch each account's logging history and merge,
   // tagging every row with its account name for the combined table.
@@ -8458,7 +8843,8 @@ async function fetchCycles() {
     // Calculate limit based on range: 1 minute polling = rangeDays * 24 * 60 records
     // Cap at 50000 for performance (enough for ~35 days of 1-minute data)
     const dynamicLimit = Math.min(50000, rangeDays * 24 * 60);
-    const accountParam = provider === 'codex' ? codexAccountParam() : provider === 'minimax' ? minimaxAccountParam() : '';
+    const accountParam = provider === 'codex' ? codexAccountParam() : provider === 'minimax' ? minimaxAccountParam() : provider === 'omp' ? ompAccountParam() : '';
+    const requestOMPAccount = State.ompAccount;
     const url = `/api/logging-history?provider=${provider}&limit=${dynamicLimit}&range=${rangeDays}${accountParam}`;
     try {
       const res = await authFetch(url);
@@ -8467,6 +8853,8 @@ async function fetchCycles() {
       if (State.cyclesRequestSeq !== requestSeq) return;
       if (getCurrentProvider() !== requestProvider) return;
       if (requestProvider === 'codex' && State.codexAccount !== requestAccount) return;
+      if (requestProvider === 'omp' && State.ompAccount !== requestOMPAccount) return;
+      if (requestProvider === 'omp' && data.quotaLabels) Object.assign(State.ompLimitLabels, data.quotaLabels);
       if (State.cyclesRange !== requestRange) return;
 
       State.allCyclesData = (data.logs || []).map(log => ({
@@ -8613,7 +9001,7 @@ function renderCyclesTable() {
   if (!thead || !tbody) return;
 
   const provider = getCurrentProvider();
-  const windowProvider = provider === 'opencode' || provider === 'commandcode';
+  const windowProvider = provider === 'opencode' || provider === 'commandcode' || provider === 'omp';
   const quotaNames = State.cyclesQuotaNames;
   const usePercent = provider === 'anthropic' || provider === 'copilot' || provider === 'codex' || provider === 'antigravity' || provider === 'minimax' || provider === 'gemini' || provider === 'openrouter' || provider === 'cursor' || provider === 'grok' || provider === 'kimi' || provider === 'mistral' || provider === 'opencode' || provider === 'ollama';
   const deltaUsesPercent = usePercent && provider !== 'minimax';
@@ -13486,6 +13874,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     updateMiniMaxAccountTabsVisibility();
   }
   initMiniMaxAccountTabs();
+  initOMPAccountPicker();
   loadAPIIntegrationsPreferences();
 
   initTheme();
@@ -13535,7 +13924,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Hide cycle overview section entirely for Gemini
     const overviewSection = document.querySelector('.cycle-overview-section');
     if (overviewSection) {
-      overviewSection.style.display = activeProvider === 'gemini' ? 'none' : '';
+      overviewSection.style.display = activeProvider === 'gemini' || activeProvider === 'omp' ? 'none' : '';
     }
 
     // Below-fold: lazy-load when sections scroll into view

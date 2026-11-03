@@ -138,6 +138,12 @@ type Config struct {
 	CommandCodeDisabled  bool   // true if COMMANDCODE_ENABLED=false explicitly opted out
 	CommandCodeBaseURL   string // COMMANDCODE_BASE_URL override for proxy setups
 
+	// OMP auth broker usage provider: polls GET {OMPBrokerURL}/v1/usage and
+	// records every account the broker holds. Setting the URL enables it.
+	OMPBrokerURL          string // OMP_BROKER_URL (e.g. http://127.0.0.1:8765)
+	OMPBrokerToken        string // OMP_BROKER_TOKEN static bearer token, or seeded by the command
+	OMPBrokerTokenCommand string // OMP_BROKER_TOKEN_COMMAND (shell command for token refresh)
+
 	// Custom API Integrations telemetry ingestion
 	APIIntegrationsEnabled   bool          // ONWATCH_API_INTEGRATIONS_ENABLED (default: true)
 	APIIntegrationsDir       string        // ONWATCH_API_INTEGRATIONS_DIR (default: ~/.onwatch/api-integrations or /data/api-integrations)
@@ -343,6 +349,9 @@ var onwatchEnvKeys = []string{
 	"COMMANDCODE_ENABLED",
 	"COMMANDCODE_BASE_URL",
 	"COMMANDCODE_AUTH_PATH",
+	"OMP_BROKER_URL",
+	"OMP_BROKER_TOKEN",
+	"OMP_BROKER_TOKEN_COMMAND",
 	"ANTIGRAVITY_ENABLED",
 	"MINIMAX_API_KEY",
 	"OPENROUTER_API_KEY",
@@ -599,6 +608,12 @@ func loadFromEnvAndFlags(flags *flagValues) (*Config, error) {
 	}
 	// File-based auto-detection (DetectCommandCodeCredentials) happens later in
 	// main.go preflight.
+
+	// OMP auth broker usage provider. The token command runs in main.go
+	// preflight, never here, so loading config stays side-effect free.
+	cfg.OMPBrokerURL = strings.TrimRight(strings.TrimSpace(os.Getenv("OMP_BROKER_URL")), "/")
+	cfg.OMPBrokerToken = strings.TrimSpace(os.Getenv("OMP_BROKER_TOKEN"))
+	cfg.OMPBrokerTokenCommand = strings.TrimSpace(os.Getenv("OMP_BROKER_TOKEN_COMMAND"))
 
 	// Custom API Integrations telemetry ingestion
 	cfg.APIIntegrationsDir = strings.TrimSpace(os.Getenv("ONWATCH_API_INTEGRATIONS_DIR"))
@@ -925,6 +940,9 @@ func (c *Config) availableProvidersLocked() []string {
 	if c.hasProviderLocked("mistral") {
 		providers = append(providers, "mistral")
 	}
+	if c.OMPBrokerURL != "" {
+		providers = append(providers, "omp")
+	}
 	return providers
 }
 
@@ -991,6 +1009,8 @@ func (c *Config) hasProviderLocked(name string) bool {
 		// Every Command Code poll is a read-only billing GET, so a detected key
 		// is enough; only an explicit opt-out disables it.
 		return !c.CommandCodeDisabled && (c.CommandCodeAPIKey != "" || c.CommandCodeEnabled)
+	case "omp":
+		return c.OMPBrokerURL != ""
 	}
 	return false
 }
@@ -1060,6 +1080,9 @@ func (c *Config) hasMultipleProvidersLocked() bool {
 		count++
 	}
 	if c.hasProviderLocked("mistral") {
+		count++
+	}
+	if c.OMPBrokerURL != "" {
 		count++
 	}
 	return count > 1
@@ -1162,6 +1185,13 @@ func (c *Config) String() string {
 	}
 	if c.CommandCodeEnabled {
 		fmt.Fprintf(&sb, "  CommandCodeEnabled: true,\n")
+	}
+	if c.OMPBrokerURL != "" {
+		fmt.Fprintf(&sb, "  OMPBrokerURL: %s,\n", c.OMPBrokerURL)
+		fmt.Fprintf(&sb, "  OMPBrokerToken: %s,\n", redactAPIKey(c.OMPBrokerToken, ""))
+		if c.OMPBrokerTokenCommand != "" {
+			fmt.Fprintf(&sb, "  OMPBrokerTokenCommand: set,\n")
+		}
 	}
 	if c.KimiAutoToken {
 		fmt.Fprintf(&sb, "  KimiAutoToken: true,\n")

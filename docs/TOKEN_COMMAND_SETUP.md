@@ -5,6 +5,7 @@ onWatch can obtain a provider access token by running a command instead of readi
 - `ANTHROPIC_TOKEN_COMMAND`
 - `CODEX_TOKEN_COMMAND`
 - `CURSOR_TOKEN_COMMAND`
+- `OMP_BROKER_TOKEN_COMMAND` (see [OMP Broker Setup](OMP_SETUP.md); unlike the others, a failed startup command does not disable the provider)
 
 The command is run through `/bin/sh -c` on Unix and `cmd /C` on Windows. Shell expansion is available, including `$HOME` and other environment variables. onWatch waits at most 30 seconds and uses trimmed standard output as the token.
 

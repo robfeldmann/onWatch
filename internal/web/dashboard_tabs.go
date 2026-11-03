@@ -52,6 +52,8 @@ func defaultProviderTabLabel(key string) string {
 		return "Command Code"
 	case "moonshot":
 		return "Moonshot"
+	case "omp":
+		return "OMP"
 	case "deepseek":
 		return "DeepSeek"
 	case "api-integrations":
