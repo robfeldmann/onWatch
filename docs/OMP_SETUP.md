@@ -43,7 +43,7 @@ Restart onWatch, or use **Settings -> Providers -> Reload**, to apply changes.
 - A response that cannot be parsed (missing fields, wrong types, duplicate accounts) fails the whole poll. Nothing is stored, so bad data is never recorded as zero usage.
 - Utilization is the used share of each limit in percent. onWatch uses `usedFraction`, then `used / limit`, then `used` for percent units, then `1 - remainingFraction`. A limit with none of these keeps a null utilization and is not tracked for resets or alerts.
 - A report with no limits (for example a Cursor team account whose spend is withheld) is still recorded, with the broker's notes.
-- Warning and critical alerts fire per account and limit, using the normal notification thresholds.
+- Warning, critical and reset alerts fire once per crossing per account and limit, using the normal notification thresholds. They name the quota as `Cursor (me@example.com) Personal Usage at 81.2%`; webhooks also carry `source_provider`, `account_label` and `quota_label` (see [Webhook Notifications](WEBHOOK_SETUP.md#payload)). Per-quota threshold overrides use the key `omp:<limit id>`.
 
 History starts when the provider is first enabled. Past broker data is not imported.
 
@@ -60,6 +60,14 @@ The **OMP** tab shows every broker account:
 - **All tab** - one OMP card with a compact summary per account; a summary opens the OMP tab on that account.
 
 The tab has no session history and no cross-limit cycle overview.
+
+## Menubar
+
+The menubar shows one card per broker account, `OMP - Cursor · me@example.com` (just `OMP` when the broker holds a single account, or the tab name you set in Settings). A card lists the account's limits with the percent, `$used/$limit` for spend limits, and the reset. Accounts without reported limits have no card. Provider order and visibility work like Codex accounts: `omp` covers every account, `omp:<id>` one account, and the tray can show any OMP limit. A card turns stale after 15 minutes without a new broker report, since the broker itself serves 5-minute-old reports.
+
+## Prometheus
+
+`/metrics` exports `onwatch_quota_utilization_percent` and `onwatch_quota_reset_timestamp_seconds` with `provider="omp"`, `account_id` = the account id, and `quota_type` = the broker limit id, plus `onwatch_account_info{provider="omp",account_name="Cursor · me@example.com"}` for joins and the usual `onwatch_agent_healthy` / `onwatch_agent_last_cycle_age_seconds` per account. See [Prometheus Metrics](PROMETHEUS_METRICS.md).
 
 ## API
 

@@ -71,6 +71,26 @@ when the provider reports a reset time. `quota_key`, `utilization`, `limit`, and
 `reset_credit_expiry`, `quota_key` is the reset credit ID and `reset_at` is the
 expiry time.
 
+The OMP broker provider (`"provider": "omp"`) adds `source_provider`,
+`account_label` and `quota_label`, and its titles use them:
+
+```json
+{
+  "event": "warning",
+  "provider": "omp",
+  "quota_key": "cursor:usd:individual-overall",
+  "account_id": "cursor:me@example.com",
+  "source_provider": "cursor",
+  "account_label": "me@example.com",
+  "quota_label": "Personal Usage",
+  "utilization": 81.2,
+  "limit": 250,
+  "threshold": 80,
+  "title": "[WARNING] Cursor (me@example.com) Personal Usage at 81.2%",
+  ...
+}
+```
+
 **The payload never contains credentials** - no OAuth tokens, API keys, or the
 webhook bearer token itself.
 
