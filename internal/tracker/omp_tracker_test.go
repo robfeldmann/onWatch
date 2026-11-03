@@ -28,8 +28,8 @@ func TestOMPTracker_CyclesPerAccountAndLimit(t *testing.T) {
 
 	tr := NewOMPTracker(s, nil)
 	var resets []string
-	tr.SetOnReset(func(accountID int64, limitID string) {
-		resets = append(resets, limitID)
+	tr.SetOnReset(func(accountID int64, limit api.OMPLimit) {
+		resets = append(resets, limit.ID)
 	})
 
 	t0 := time.Now().UTC().Add(-6 * time.Hour).Truncate(time.Minute)

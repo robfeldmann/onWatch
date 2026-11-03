@@ -164,3 +164,19 @@ func TestOMPAgent_RealClientMalformedAnd401(t *testing.T) {
 		t.Fatalf("good poll stored accounts=%d snapshots=%d, want 4 and 4", accounts, snapshots)
 	}
 }
+
+func TestOMPQuotaStatusLabels(t *testing.T) {
+	util, limit := 82.5, 250.0
+	reset := time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC)
+	account := &store.OMPAccount{ID: 4, Key: "cursor:work@example.com", SourceProvider: "cursor", Identity: "work@example.com"}
+	status := OMPQuotaStatus(account, api.OMPLimit{ID: "cursor:usd:individual-overall", Label: "Personal Usage", Utilization: &util, Limit: &limit, ResetsAt: &reset})
+	if status.Provider != "omp" || status.QuotaKey != "cursor:usd:individual-overall" || status.AccountID != "cursor:work@example.com" {
+		t.Errorf("dedupe keys = %+v", status)
+	}
+	if status.ProviderLabel != "Cursor" || status.AccountLabel != "work@example.com" || status.QuotaLabel != "Personal Usage" || status.SourceProvider != "cursor" {
+		t.Errorf("labels = %+v", status)
+	}
+	if status.Utilization != 82.5 || status.Limit != 250 || !status.ResetAt.Equal(reset) {
+		t.Errorf("values = %+v", status)
+	}
+}

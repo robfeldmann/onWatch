@@ -157,8 +157,7 @@ func (a *OMPAgent) poll(ctx context.Context) {
 }
 
 // notify checks every limit of a freshly stored report against the alert
-// thresholds. QuotaKey is the broker limit id; AccountID is the account key
-// so alerts name the account and dedupe per account.
+// thresholds.
 func (a *OMPAgent) notify(account *store.OMPAccount, report api.OMPReport) {
 	if a.notifier == nil {
 		return
@@ -167,16 +166,31 @@ func (a *OMPAgent) notify(account *store.OMPAccount, report api.OMPReport) {
 		if l.Utilization == nil {
 			continue
 		}
-		status := notify.QuotaStatus{
-			Provider:    "omp",
-			QuotaKey:    l.ID,
-			AccountID:   account.Key,
-			Utilization: *l.Utilization,
-			ResetAt:     derefTime(l.ResetsAt),
-		}
-		if l.Limit != nil {
-			status.Limit = *l.Limit
-		}
-		a.notifier.Check(status)
+		a.notifier.Check(OMPQuotaStatus(account, l))
 	}
+}
+
+// OMPQuotaStatus builds the alert status of one broker limit. QuotaKey is the
+// broker limit id and AccountID the account key, so alerts dedupe per account
+// and limit; the labels make the text read "Cursor (me@example.com) Personal
+// Usage at 80.0%". The reset callback uses it too, so both name the quota the
+// same way.
+func OMPQuotaStatus(account *store.OMPAccount, l api.OMPLimit) notify.QuotaStatus {
+	status := notify.QuotaStatus{
+		Provider:       "omp",
+		QuotaKey:       l.ID,
+		AccountID:      account.Key,
+		ResetAt:        derefTime(l.ResetsAt),
+		ProviderLabel:  account.ProviderLabel(),
+		AccountLabel:   account.Identity,
+		QuotaLabel:     l.Label,
+		SourceProvider: account.SourceProvider,
+	}
+	if l.Utilization != nil {
+		status.Utilization = *l.Utilization
+	}
+	if l.Limit != nil {
+		status.Limit = *l.Limit
+	}
+	return status
 }

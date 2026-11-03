@@ -113,17 +113,24 @@ const (
 // WebhookPayload is the JSON body POSTed to the configured endpoint.
 // It carries no credentials: no OAuth tokens, API keys, or bearer tokens.
 type WebhookPayload struct {
-	Event       string   `json:"event"`
-	Provider    string   `json:"provider"`
-	QuotaKey    string   `json:"quota_key,omitempty"`
-	AccountID   string   `json:"account_id,omitempty"`
-	Utilization *float64 `json:"utilization,omitempty"`
-	Limit       *float64 `json:"limit,omitempty"`
-	Threshold   *float64 `json:"threshold,omitempty"`
-	ResetAt     string   `json:"reset_at,omitempty"`
-	Title       string   `json:"title"`
-	Message     string   `json:"message"`
-	Timestamp   string   `json:"timestamp"`
+	Event     string `json:"event"`
+	Provider  string `json:"provider"`
+	QuotaKey  string `json:"quota_key,omitempty"`
+	AccountID string `json:"account_id,omitempty"`
+	// SourceProvider, AccountLabel and QuotaLabel are set by providers whose
+	// keys are not human readable (the OMP broker: provider "omp",
+	// source_provider "cursor", account_label "me@example.com",
+	// quota_label "Personal Usage").
+	SourceProvider string   `json:"source_provider,omitempty"`
+	AccountLabel   string   `json:"account_label,omitempty"`
+	QuotaLabel     string   `json:"quota_label,omitempty"`
+	Utilization    *float64 `json:"utilization,omitempty"`
+	Limit          *float64 `json:"limit,omitempty"`
+	Threshold      *float64 `json:"threshold,omitempty"`
+	ResetAt        string   `json:"reset_at,omitempty"`
+	Title          string   `json:"title"`
+	Message        string   `json:"message"`
+	Timestamp      string   `json:"timestamp"`
 }
 
 // WebhookSender delivers notification payloads to a user-configured HTTP endpoint.
