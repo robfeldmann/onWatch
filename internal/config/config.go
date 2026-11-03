@@ -52,19 +52,21 @@ type Config struct {
 	ZaiRegion  string // ZAI_REGION ( "global" | "cn", default: "global" )
 
 	// Anthropic provider configuration
-	AnthropicToken     string // ANTHROPIC_TOKEN or auto-detected
-	AnthropicAutoToken bool   // true if token was auto-detected
-	AnthropicSource    string // ANTHROPIC_SOURCE: "auto" (default), "statusline", "api"
+	AnthropicToken        string // ANTHROPIC_TOKEN or auto-detected
+	AnthropicTokenCommand string // ANTHROPIC_TOKEN_COMMAND (shell command for token refresh)
+	AnthropicAutoToken    bool   // true if token was auto-detected
+	AnthropicSource       string // ANTHROPIC_SOURCE: "auto" (default), "statusline", "api"
 
 	// Copilot provider configuration
 	CopilotToken string // COPILOT_TOKEN (GitHub PAT with copilot scope)
 
 	// Codex provider configuration
-	CodexToken       string // CODEX_TOKEN or auto-detected
-	CodexAutoToken   bool   // true if token was auto-detected
-	CodexAutoSource  string // "codex" | "opencode" when auto-detected (display/logging)
-	CodexHasProfiles bool   // true if saved profiles exist (enables bootstrap without token)
-	OpenCodeEnabled  bool   // OPENCODE_ENABLED=true: track ChatGPT via OpenCode auth.json (feeds Codex)
+	CodexToken        string // CODEX_TOKEN or auto-detected
+	CodexTokenCommand string // CODEX_TOKEN_COMMAND (shell command for token refresh)
+	CodexAutoToken    bool   // true if token was auto-detected
+	CodexAutoSource   string // "codex" | "opencode" when auto-detected (display/logging)
+	CodexHasProfiles  bool   // true if saved profiles exist (enables bootstrap without token)
+	OpenCodeEnabled   bool   // OPENCODE_ENABLED=true: track ChatGPT via OpenCode auth.json (feeds Codex)
 	// OpenCode Go provider configuration
 	OpenCodeGoWorkspaceID string // OPENCODE_GO_WORKSPACE_ID
 	OpenCodeGoAuthCookie  string // OPENCODE_GO_AUTH_COOKIE: __Host-console_session cookie value (or a full cookie header)
@@ -114,8 +116,9 @@ type Config struct {
 	GeminiAccessToken  string // GEMINI_ACCESS_TOKEN (for Docker/headless)
 
 	// Cursor provider configuration (auto-detected from Cursor Desktop SQLite or keychain)
-	CursorToken     string // CURSOR_TOKEN or auto-detected
-	CursorAutoToken bool   // true if token was auto-detected
+	CursorToken        string // CURSOR_TOKEN or auto-detected
+	CursorTokenCommand string // CURSOR_TOKEN_COMMAND (shell command for token refresh)
+	CursorAutoToken    bool   // true if token was auto-detected
 
 	// Grok provider configuration (auto-detected from ~/.grok/auth.json or $GROK_HOME/auth.json)
 	GrokToken     string // GROK_TOKEN or auto-detected bearer from auth.json
@@ -318,8 +321,10 @@ var onwatchEnvKeys = []string{
 	"SYNTHETIC_API_KEY",
 	"ZAI_API_KEY",
 	"ANTHROPIC_TOKEN",
+	"ANTHROPIC_TOKEN_COMMAND",
 	"COPILOT_TOKEN",
 	"CODEX_TOKEN",
+	"CODEX_TOKEN_COMMAND",
 	"OPENCODE_ENABLED",
 	"OPENCODE_GO_WORKSPACE_ID",
 	"OPENCODE_GO_AUTH_COOKIE",
@@ -346,6 +351,7 @@ var onwatchEnvKeys = []string{
 	"DEEPSEEK_API_KEY",
 	"DEEPSEEK_BASE_URL",
 	"CURSOR_TOKEN",
+	"CURSOR_TOKEN_COMMAND",
 	"GROK_TOKEN",
 	"GROK_ENABLED",
 	"GROK_HOME",
@@ -430,6 +436,7 @@ func loadFromEnvAndFlags(flags *flagValues) (*Config, error) {
 
 	// Anthropic provider
 	cfg.AnthropicToken = os.Getenv("ANTHROPIC_TOKEN")
+	cfg.AnthropicTokenCommand = strings.TrimSpace(os.Getenv("ANTHROPIC_TOKEN_COMMAND"))
 	cfg.AnthropicSource = strings.ToLower(strings.TrimSpace(os.Getenv("ANTHROPIC_SOURCE")))
 	if cfg.AnthropicSource == "" {
 		cfg.AnthropicSource = "auto"
@@ -440,6 +447,7 @@ func loadFromEnvAndFlags(flags *flagValues) (*Config, error) {
 
 	// Codex provider
 	cfg.CodexToken = strings.TrimSpace(os.Getenv("CODEX_TOKEN"))
+	cfg.CodexTokenCommand = strings.TrimSpace(os.Getenv("CODEX_TOKEN_COMMAND"))
 	cfg.CodexShowAvailable = strings.ToLower(strings.TrimSpace(os.Getenv("CODEX_SHOW_AVAILABLE")))
 	if cfg.CodexShowAvailable == "" {
 		cfg.CodexShowAvailable = "usage"
@@ -536,6 +544,7 @@ func loadFromEnvAndFlags(flags *flagValues) (*Config, error) {
 
 	// Cursor provider (auto-detected from Cursor Desktop SQLite or keychain)
 	cfg.CursorToken = strings.TrimSpace(os.Getenv("CURSOR_TOKEN"))
+	cfg.CursorTokenCommand = strings.TrimSpace(os.Getenv("CURSOR_TOKEN_COMMAND"))
 
 	// Grok provider (primary via ~/.grok/auth.json or GROK_HOME; explicit token for Docker)
 	cfg.GrokToken = strings.TrimSpace(os.Getenv("GROK_TOKEN"))
@@ -859,7 +868,7 @@ func (c *Config) AvailableProviders() []string {
 
 func (c *Config) availableProvidersLocked() []string {
 	var providers []string
-	if c.AnthropicToken != "" {
+	if c.AnthropicToken != "" || c.AnthropicTokenCommand != "" {
 		providers = append(providers, "anthropic")
 	}
 	if c.SyntheticAPIKey != "" {
@@ -871,7 +880,7 @@ func (c *Config) availableProvidersLocked() []string {
 	if c.CopilotToken != "" {
 		providers = append(providers, "copilot")
 	}
-	if c.CodexToken != "" || c.CodexHasProfiles || c.OpenCodeEnabled {
+	if c.CodexToken != "" || c.CodexTokenCommand != "" || c.CodexHasProfiles || c.OpenCodeEnabled {
 		providers = append(providers, "codex")
 	}
 	if c.AntigravityEnabled {
@@ -892,7 +901,7 @@ func (c *Config) availableProvidersLocked() []string {
 	if c.GeminiEnabled {
 		providers = append(providers, "gemini")
 	}
-	if c.CursorToken != "" {
+	if c.CursorToken != "" || c.CursorTokenCommand != "" {
 		providers = append(providers, "cursor")
 	}
 	if c.GrokToken != "" || c.GrokEnabled {
@@ -943,11 +952,11 @@ func (c *Config) hasProviderLocked(name string) bool {
 	case "zai":
 		return c.ZaiAPIKey != ""
 	case "anthropic":
-		return c.AnthropicToken != ""
+		return c.AnthropicToken != "" || c.AnthropicTokenCommand != ""
 	case "copilot":
 		return c.CopilotToken != ""
 	case "codex":
-		return c.CodexToken != "" || c.CodexHasProfiles || c.OpenCodeEnabled
+		return c.CodexToken != "" || c.CodexTokenCommand != "" || c.CodexHasProfiles || c.OpenCodeEnabled
 	case "antigravity":
 		return c.AntigravityEnabled
 	case "minimax":
@@ -961,7 +970,7 @@ func (c *Config) hasProviderLocked(name string) bool {
 	case "gemini":
 		return c.GeminiEnabled
 	case "cursor":
-		return c.CursorToken != ""
+		return c.CursorToken != "" || c.CursorTokenCommand != ""
 	case "grok":
 		return c.GrokToken != "" || c.GrokEnabled
 	case "kimi":
@@ -1002,13 +1011,13 @@ func (c *Config) hasMultipleProvidersLocked() bool {
 	if c.ZaiAPIKey != "" {
 		count++
 	}
-	if c.AnthropicToken != "" {
+	if c.AnthropicToken != "" || c.AnthropicTokenCommand != "" {
 		count++
 	}
 	if c.CopilotToken != "" {
 		count++
 	}
-	if c.CodexToken != "" || c.CodexHasProfiles || c.OpenCodeEnabled {
+	if c.CodexToken != "" || c.CodexTokenCommand != "" || c.CodexHasProfiles || c.OpenCodeEnabled {
 		count++
 	}
 	if c.AntigravityEnabled {
@@ -1029,7 +1038,7 @@ func (c *Config) hasMultipleProvidersLocked() bool {
 	if c.GeminiEnabled {
 		count++
 	}
-	if c.CursorToken != "" {
+	if c.CursorToken != "" || c.CursorTokenCommand != "" {
 		count++
 	}
 	if c.GrokToken != "" || c.GrokEnabled {
