@@ -1965,13 +1965,17 @@ func run() error {
 			notifier.Check(notify.QuotaStatus{Provider: "opencode", QuotaKey: quotaName, ResetOccurred: true})
 		})
 	}
-	ompTr.SetOnReset(func(accountID int64, limitID string) {
-		// AccountID matches the agent's threshold alerts: the account key.
-		accountKey := fmt.Sprintf("%d", accountID)
-		if acc, err := db.GetProviderAccountByID(accountID); err == nil && acc != nil {
-			accountKey = acc.Name
+	ompTr.SetOnReset(func(accountID int64, limit api.OMPLimit) {
+		// The same status the agent's threshold alerts use, so the reset
+		// clears their dedupe log and reads with the same labels.
+		account, err := db.GetOMPAccount(accountID)
+		if err != nil || account == nil {
+			logger.Warn("OMP reset for unknown account", "account_id", accountID, "error", err)
+			return
 		}
-		notifier.Check(notify.QuotaStatus{Provider: "omp", QuotaKey: limitID, AccountID: accountKey, ResetOccurred: true})
+		status := agent.OMPQuotaStatus(account, limit)
+		status.ResetOccurred = true
+		notifier.Check(status)
 	})
 	if ollamaTr != nil {
 		ollamaTr.SetOnReset(func(quotaName string) {

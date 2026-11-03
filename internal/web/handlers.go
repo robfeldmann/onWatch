@@ -1650,6 +1650,9 @@ func providerKeyBase(provider string) string {
 	if strings.HasPrefix(provider, "minimax:") {
 		return "minimax"
 	}
+	if strings.HasPrefix(provider, "omp:") {
+		return "omp"
+	}
 	return provider
 }
 

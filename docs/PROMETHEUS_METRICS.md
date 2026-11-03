@@ -62,12 +62,13 @@ Counters live outside the per-scrape reset path, so `rate()` / `increase()` quer
 
 ### Label semantics
 
-- `provider` - `anthropic`, `codex`, `copilot`, `zai`, `minimax`, `antigravity`, `gemini`, `openrouter`, `api_integrations`.
+- `provider` - `anthropic`, `codex`, `copilot`, `zai`, `minimax`, `antigravity`, `gemini`, `openrouter`, `api_integrations`, `omp`.
 - `quota_type` - provider-specific quota identifier. For Gemini, Antigravity, and MiniMax this is the model ID (`gemini-2.5-pro`, etc.) so **cardinality grows as new models appear**; configure Prometheus retention accordingly.
   - MiniMax also emits the weekly window as `weekly_<model>` (for example `weekly_MiniMax-M2`) alongside the rolling five-hour `<model>` series, each with its own reset timestamp. Accounts predating the weekly window emit no weekly series rather than a flat zero. To alert on one window only, match `quota_type=~"weekly_.*"` or exclude it with `quota_type!~"weekly_.*"`.
   - Z.ai emits `tokens` and `time`. A series is present whenever the plan declares that quota at all, not only once it has been consumed; a plan that reports a percentage while leaving the numeric budget at zero still exports (issue #112). A quota the plan does not have emits no series.
-- `account_id` - numeric account ID for multi-account providers (Codex, MiniMax); `"default"` for single-account providers.
-- `account_name` - human-readable account name from `onwatch_account_info` (join-metric).
+  - OMP broker (`provider="omp"`) emits one series per broker limit; `quota_type` is the broker's limit id, which starts with the source provider (`cursor:usd:individual-overall`, `anthropic:5h`, `openai-codex:primary`). Limits whose utilization the broker does not report emit no series. See [OMP Broker Setup](OMP_SETUP.md).
+- `account_id` - numeric account ID for multi-account providers (Codex, MiniMax, OMP); `"default"` for single-account providers.
+- `account_name` - human-readable account name from `onwatch_account_info` (join-metric). For OMP it is `<provider> · <identity>`, for example `Cursor · me@example.com`, so it also names the source provider.
 - `unit` - on `onwatch_credits_balance` only: `usd` | `credits` | `prompt_credits`.
 
 ## Example PromQL
@@ -154,6 +155,7 @@ groups:
 - Metrics are refreshed on every scrape from the SQLite store. At typical 30-60s scrape intervals the cost is negligible.
 - Most metrics are gauges that `Reset()` each scrape, so series for a provider disappear if it becomes unconfigured. Counters (`onwatch_cycles_*_total`, `onwatch_scrape_errors_total`) are preserved across scrapes.
 - `onwatch_agent_healthy` reflects poll freshness, not real OAuth validity. A transient network blip or onWatch restart will flip it to 0. For true OAuth-expiry alerting, watch logs or the `/api/*/health` dashboard endpoints.
+- OMP `onwatch_agent_healthy` allows 5 extra minutes before reporting 0: the broker serves a cached report for 5 minutes and onWatch stores a report only when the broker refetched it, so the newest report can trail the last poll by that much.
 - `account_id` is a numeric ID. Use `onwatch_account_info` for Grafana panels that need human-readable labels.
 
 ## Related

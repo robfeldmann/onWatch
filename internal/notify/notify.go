@@ -75,6 +75,32 @@ type QuotaStatus struct {
 	Limit         float64
 	ResetOccurred bool
 	ResetAt       time.Time // when the quota window next resets (zero if unknown)
+
+	// Optional display names for providers whose keys are not human readable
+	// (the OMP broker: QuotaKey "cursor:usd:individual-overall", AccountID
+	// "cursor:me@example.com"). When QuotaLabel is set, alert text names the
+	// quota as "<ProviderLabel> (<AccountLabel>) <QuotaLabel>". Dedupe still
+	// uses Provider, QuotaKey and AccountID.
+	ProviderLabel  string // e.g. "Cursor"
+	AccountLabel   string // e.g. "me@example.com"
+	QuotaLabel     string // e.g. "Personal Usage"
+	SourceProvider string // upstream provider id for webhooks, e.g. "cursor"
+}
+
+// quotaDisplayName names the quota in alert text: the labelled form when the
+// caller supplied labels, otherwise "<Provider> quota <QuotaKey>".
+func quotaDisplayName(status QuotaStatus) string {
+	if status.QuotaLabel == "" {
+		return fmt.Sprintf("%s quota %s", titleCase(status.Provider), status.QuotaKey)
+	}
+	name := status.QuotaLabel
+	if status.AccountLabel != "" {
+		name = "(" + status.AccountLabel + ") " + name
+	}
+	if status.ProviderLabel != "" {
+		name = status.ProviderLabel + " " + name
+	}
+	return name
 }
 
 // New creates a new NotificationEngine with default configuration.
@@ -674,18 +700,16 @@ func titleCase(s string) string {
 
 // buildSubject creates the email subject line.
 func (e *NotificationEngine) buildSubject(status QuotaStatus, notifType string) string {
+	name := quotaDisplayName(status)
 	switch notifType {
 	case "critical":
-		return fmt.Sprintf("[CRITICAL] %s quota %s at %.1f%%",
-			titleCase(status.Provider), status.QuotaKey, status.Utilization)
+		return fmt.Sprintf("[CRITICAL] %s at %.1f%%", name, status.Utilization)
 	case "warning":
-		return fmt.Sprintf("[WARNING] %s quota %s at %.1f%%",
-			titleCase(status.Provider), status.QuotaKey, status.Utilization)
+		return fmt.Sprintf("[WARNING] %s at %.1f%%", name, status.Utilization)
 	case "reset":
-		return fmt.Sprintf("[RESET] %s quota %s has been reset",
-			titleCase(status.Provider), status.QuotaKey)
+		return fmt.Sprintf("[RESET] %s has been reset", name)
 	default:
-		return fmt.Sprintf("[%s] %s quota %s", notifType, status.Provider, status.QuotaKey)
+		return fmt.Sprintf("[%s] %s", notifType, name)
 	}
 }
 
@@ -693,7 +717,18 @@ func (e *NotificationEngine) buildSubject(status QuotaStatus, notifType string) 
 func (e *NotificationEngine) buildBody(status QuotaStatus, notifType string) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Provider: %s\n", status.Provider))
-	sb.WriteString(fmt.Sprintf("Quota: %s\n", status.QuotaKey))
+	if status.AccountLabel != "" {
+		account := status.AccountLabel
+		if status.ProviderLabel != "" {
+			account = status.ProviderLabel + " · " + account
+		}
+		sb.WriteString(fmt.Sprintf("Account: %s\n", account))
+	}
+	if status.QuotaLabel != "" {
+		sb.WriteString(fmt.Sprintf("Quota: %s (%s)\n", status.QuotaLabel, status.QuotaKey))
+	} else {
+		sb.WriteString(fmt.Sprintf("Quota: %s\n", status.QuotaKey))
+	}
 	sb.WriteString(fmt.Sprintf("Utilization: %.1f%%\n", status.Utilization))
 	if status.Limit > 0 {
 		sb.WriteString(fmt.Sprintf("Limit: %.0f\n", status.Limit))
@@ -872,9 +907,13 @@ func webhookPayloadForQuota(status QuotaStatus, event, title, message string, th
 		Provider:  normalizeNotificationProvider(status.Provider),
 		QuotaKey:  status.QuotaKey,
 		AccountID: status.AccountID,
-		Title:     title,
-		Message:   message,
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		// Display fields for providers that supply them (OMP broker).
+		SourceProvider: status.SourceProvider,
+		AccountLabel:   status.AccountLabel,
+		QuotaLabel:     status.QuotaLabel,
+		Title:          title,
+		Message:        message,
+		Timestamp:      time.Now().UTC().Format(time.RFC3339),
 	}
 
 	utilization := status.Utilization

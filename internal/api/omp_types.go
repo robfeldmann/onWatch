@@ -333,3 +333,24 @@ func ompNotes(notes []string) []string {
 	}
 	return out
 }
+
+// ompProviderLabels names the broker's provider ids for display.
+var ompProviderLabels = map[string]string{
+	"anthropic":    "Anthropic",
+	"cursor":       "Cursor",
+	"openai-codex": "Codex",
+	"opencode-go":  "OpenCode Go",
+}
+
+// OMPProviderLabel returns the display name of a broker provider id, title
+// casing ids it does not know ("kimi-code" -> "Kimi Code").
+func OMPProviderLabel(id string) string {
+	if label, ok := ompProviderLabels[id]; ok {
+		return label
+	}
+	parts := strings.FieldsFunc(id, func(r rune) bool { return r == '-' || r == '_' })
+	for i, p := range parts {
+		parts[i] = strings.ToUpper(p[:1]) + p[1:]
+	}
+	return strings.Join(parts, " ")
+}

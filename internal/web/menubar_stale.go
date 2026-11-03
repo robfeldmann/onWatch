@@ -72,10 +72,14 @@ type staleOverride struct {
 //     read as merely old for hours.
 //   - opencode: key mode reuses a 60s client cache, so the honest capture time
 //     can trail the poll by a minute; 3 intervals plus the floor covers it.
+//   - omp: a card's time is the broker's fetchedAt, and the broker serves a
+//     cached report for 5 minutes, so the time can trail the poll by the cache
+//     age plus one interval.
 var staleOverrides = map[string]staleOverride{
 	"anthropic":   {factor: 3, floor: anthropicStatuslineWindow},
 	"antigravity": {factor: 3, floor: 15 * time.Minute},
 	"opencode":    {factor: 3, floor: 5 * time.Minute},
+	"omp":         {factor: 3, floor: 15 * time.Minute},
 	"mistral": {
 		factor: 3,
 		statuses: map[string]time.Duration{

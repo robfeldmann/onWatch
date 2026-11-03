@@ -32,7 +32,7 @@ type OMPTracker struct {
 	mu         sync.Mutex
 	lastValues map[ompLimitKey]float64
 	lastResets map[ompLimitKey]time.Time
-	onReset    func(accountID int64, limitID string)
+	onReset    func(accountID int64, limit api.OMPLimit)
 }
 
 // OMPSummary contains computed usage statistics for one limit of an account.
@@ -65,7 +65,7 @@ func NewOMPTracker(store *store.Store, logger *slog.Logger) *OMPTracker {
 }
 
 // SetOnReset registers a callback invoked when a limit reset is detected.
-func (t *OMPTracker) SetOnReset(fn func(accountID int64, limitID string)) {
+func (t *OMPTracker) SetOnReset(fn func(accountID int64, limit api.OMPLimit)) {
 	t.mu.Lock()
 	t.onReset = fn
 	t.mu.Unlock()
@@ -168,7 +168,7 @@ func (t *OMPTracker) processLimit(accountID int64, limit api.OMPLimit, sampledAt
 		}
 		t.logger.Info("OMP limit reset detected", "account_id", accountID, "limit", limit.ID)
 		if t.onReset != nil {
-			t.onReset(accountID, limit.ID)
+			t.onReset(accountID, limit)
 		}
 		return nil
 	}

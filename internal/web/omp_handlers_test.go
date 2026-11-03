@@ -294,10 +294,10 @@ func TestOMPInsightsLoggingHistoryOverview(t *testing.T) {
 }
 
 func TestOMPAccountLabels(t *testing.T) {
-	if got := ompProviderLabel("openai-codex"); got != "Codex" {
+	if got := api.OMPProviderLabel("openai-codex"); got != "Codex" {
 		t.Errorf("openai-codex label = %q", got)
 	}
-	if got := ompProviderLabel("kimi-code"); got != "Kimi Code" {
+	if got := api.OMPProviderLabel("kimi-code"); got != "Kimi Code" {
 		t.Errorf("fallback label = %q", got)
 	}
 	m := ompAccountMap(store.OMPAccount{ID: 1, SourceProvider: "cursor", Identity: "work@example.com"})

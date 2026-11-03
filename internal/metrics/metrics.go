@@ -267,6 +267,65 @@ func (m *Metrics) Scrape(s *store.Store, pollInterval time.Duration) {
 	m.scrapeMoonshot(s, staleThreshold)
 	m.scrapeDeepSeek(s, staleThreshold)
 	m.scrapeAPIIntegrations(s, staleThreshold)
+	m.scrapeOMP(s, staleThreshold)
+}
+
+// ompBrokerCacheAge is how long the OMP auth broker serves a cached report.
+// A snapshot is stored only when the broker's fetchedAt changes, so the newest
+// one can trail the poll by this much on a healthy agent.
+const ompBrokerCacheAge = 5 * time.Minute
+
+// scrapeOMP exports every OMP auth broker account: provider="omp",
+// account_id = the numeric provider_accounts id, quota_type = the broker limit
+// id (which starts with the source provider, e.g. "cursor:usd:individual-overall"),
+// and an onwatch_account_info series whose account_name is the account label
+// ("Cursor · me@example.com"). Limits without a utilization are skipped.
+func (m *Metrics) scrapeOMP(s *store.Store, staleThreshold time.Duration) {
+	method := "omp"
+
+	accounts, err := s.QueryOMPAccounts()
+	if err != nil {
+		m.scrapeErrorsTotal.WithLabelValues(method, "query_failed").Inc()
+		return
+	}
+	if len(accounts) == 0 {
+		return
+	}
+	latest, err := s.QueryLatestOMPSnapshots()
+	if err != nil {
+		m.scrapeErrorsTotal.WithLabelValues(method, "query_failed").Inc()
+		return
+	}
+	byAccount := make(map[int64]*store.OMPSnapshot, len(latest))
+	for _, snap := range latest {
+		byAccount[snap.AccountID] = snap
+	}
+
+	for _, acct := range accounts {
+		accountID := strconv.FormatInt(acct.ID, 10)
+		m.accountInfo.WithLabelValues(method, accountID, acct.Label()).Set(1)
+
+		snap := byAccount[acct.ID]
+		if snap == nil {
+			continue
+		}
+		m.recordLastCycleAge(method, accountID, snap.FetchedAt, staleThreshold+ompBrokerCacheAge)
+
+		for _, l := range snap.Limits {
+			if l.Utilization == nil {
+				continue
+			}
+			labels := prometheus.Labels{
+				"provider":   method,
+				"quota_type": l.ID,
+				"account_id": accountID,
+			}
+			m.quotaUtilization.With(labels).Set(*l.Utilization)
+			if l.ResetsAt != nil && !l.ResetsAt.IsZero() {
+				m.quotaResetTimestamp.With(labels).Set(float64(l.ResetsAt.Unix()))
+			}
+		}
+	}
 }
 
 func (m *Metrics) scrapeAPIIntegrations(s *store.Store, staleThreshold time.Duration) {
