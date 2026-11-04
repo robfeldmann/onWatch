@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1091,16 +1092,37 @@ func updateMenubarProviderHistory(settings *menubar.Settings, configured []strin
 		}
 	}
 	for _, provider := range configured {
-		if menubarSettingsKeyAllows(provider, settings.KnownProviders) {
+		accountKey := providerKeyBase(provider) != provider
+		if accountKey {
+			// An account card ("omp:7") is known only by its own key: the
+			// base key in the history says nothing about accounts added later.
+			if slices.Contains(settings.KnownProviders, provider) {
+				continue
+			}
+		} else if menubarSettingsKeyAllows(provider, settings.KnownProviders) {
 			continue
 		}
 		settings.KnownProviders = append(settings.KnownProviders, provider)
-		if len(settings.VisibleProviders) > 0 && !menubarSettingsKeyAllows(provider, settings.VisibleProviders) {
+		if len(settings.VisibleProviders) > 0 && !menubarSettingsKeyAllows(provider, settings.VisibleProviders) &&
+			(!accountKey || menubarVisibleHasBase(settings.VisibleProviders, providerKeyBase(provider))) {
+			// A new account shows when the user kept any account of its
+			// provider visible; hiding every account hides new ones too.
 			settings.VisibleProviders = append(settings.VisibleProviders, provider)
 		}
 		changed = true
 	}
 	return changed
+}
+
+// menubarVisibleHasBase reports whether a visible list shows any card of a
+// provider family: its base key or one of its accounts.
+func menubarVisibleHasBase(visible []string, base string) bool {
+	for _, key := range visible {
+		if providerKeyBase(key) == base {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *Handler) configuredMenubarProviders() []string {
@@ -1111,6 +1133,16 @@ func (h *Handler) configuredMenubarProviders() []string {
 	for _, provider := range providerCatalog() {
 		if h.config.HasProvider(provider.Key) {
 			configured = append(configured, provider.Key)
+		}
+	}
+	// Every OMP broker account is its own menubar card. Listing the accounts
+	// lets a new one be discovered like a new provider, so a saved visible
+	// list shows it instead of silently hiding it.
+	if h.config.HasProvider("omp") && h.store != nil {
+		if accounts, err := h.store.QueryOMPAccounts(); err == nil {
+			for _, acc := range accounts {
+				configured = append(configured, fmt.Sprintf("omp:%d", acc.ID))
+			}
 		}
 	}
 	return configured

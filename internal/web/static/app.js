@@ -11477,15 +11477,19 @@ async function fetchMenubarProviders() {
 
   const providerByKey = new Map(providers.map(p => [p.key, p]));
   const codexStatus = providerByKey.get('codex') || null;
+  const ompStatus = providerByKey.get('omp') || null;
   const items = providers
-    .filter(p => p.key !== 'codex')
+    .filter(p => p.key !== 'codex' && p.key !== 'omp')
     .map(p => ({
       key: p.key,
       name: p.name,
-      meta: `${p.pollingEnabled === false ? 'Telemetry Off' : 'Telemetry On'} · ${p.dashboardVisible === false ? 'Hidden from dashboard' : 'Visible in dashboard'}`,
+      meta: menubarStatusMeta(p),
       dashboardVisible: p.dashboardVisible !== false,
     }));
 
+  if (ompStatus) {
+    items.push(...await fetchMenubarOMPItems(ompStatus));
+  }
   try {
     const res = await authFetch(`${API_BASE}/api/codex/profiles`);
     if (res.ok) {
@@ -11499,7 +11503,10 @@ async function fetchMenubarProviders() {
           const key = `codex:${profile.id}`;
           items.push({
             key,
-            name: profiles.length > 1 ? `Codex - ${escapeHtml(profile.name)}` : (codexStatus?.name || 'Codex'),
+            name: profiles.length > 1 ? `Codex - ${profile.name}` : (codexStatus?.name || 'Codex'),
+            // Several profiles: the row label is "<Codex tab name> - <profile>",
+            // so a renamed tab never labels every profile the same.
+            ...(profiles.length > 1 ? { groupLabel: 'Codex', separator: ' - ', accountLabel: profile.name } : {}),
             meta: profiles.length > 1
               ? 'Per-account Codex usage'
               : `${codexStatus?.pollingEnabled === false ? 'Telemetry Off' : 'Telemetry On'} · ${codexStatus?.dashboardVisible === false ? 'Hidden from dashboard' : 'Visible in dashboard'}`,
@@ -11527,6 +11534,62 @@ async function fetchMenubarProviders() {
   return items;
 }
 
+function menubarStatusMeta(status) {
+  return `${status?.pollingEnabled === false ? 'Telemetry Off' : 'Telemetry On'} · ${status?.dashboardVisible === false ? 'Hidden from dashboard' : 'Visible in dashboard'}`;
+}
+
+// buildMenubarOMPItems lists one menubar-order entry per OMP broker account,
+// keyed omp:<id> like the menubar cards, so accounts reorder and hide one by
+// one. Before the first poll there are no accounts, and the bare "omp" key
+// (which covers every account card) stands in.
+function buildMenubarOMPItems(accounts, status) {
+  const meta = menubarStatusMeta(status);
+  const dashboardVisible = status ? status.dashboardVisible !== false : true;
+  if (!Array.isArray(accounts) || accounts.length === 0) {
+    return [{ key: 'omp', name: status?.name || 'OMP', meta, dashboardVisible }];
+  }
+  return accounts.map(acc => ({
+    key: `omp:${acc.accountId}`,
+    name: `OMP · ${acc.label}`,
+    groupLabel: 'OMP',
+    separator: ' · ',
+    accountLabel: acc.label,
+    meta,
+    dashboardVisible,
+  }));
+}
+
+async function fetchMenubarOMPItems(status) {
+  let accounts = [];
+  if (status.configured !== false) {
+    try {
+      const res = await authFetch(`${API_BASE}/api/current?provider=omp`);
+      if (res.ok) {
+        const data = await res.json();
+        accounts = Array.isArray(data.accounts) ? data.accounts : [];
+      }
+    } catch (e) {
+      // fall back to the bare key below
+    }
+  }
+  return buildMenubarOMPItems(accounts, status);
+}
+
+// menubarOrderDisplayName labels one menubar-order row. A renamed dashboard
+// tab names a provider row, but for an account row it is only the group
+// prefix ("<tab name> · Cursor · me@example.com"): every account of the
+// provider would otherwise carry the same label.
+function menubarOrderDisplayName(provider, tabLabels) {
+  const key = String(provider.key || '');
+  const baseKey = key.split(':')[0];
+  const tabLabel = tabLabels ? tabLabels[baseKey] : '';
+  if (provider.accountLabel) {
+    const group = tabLabel || provider.groupLabel || defaultProviderTabLabel(baseKey);
+    return `${group}${provider.separator || ' · '}${provider.accountLabel}`;
+  }
+  return tabLabel || (tabLabels && tabLabels[key]) || provider.name || baseKey;
+}
+
 // Built-in dashboard tab titles (must match server defaultProviderTabLabel).
 const DEFAULT_PROVIDER_TAB_LABELS = {
   synthetic: 'Synthetic',
@@ -11546,6 +11609,7 @@ const DEFAULT_PROVIDER_TAB_LABELS = {
   ollama: 'Ollama',
   muse: 'Muse',
   commandcode: 'Command Code',
+  omp: 'OMP',
   'api-integrations': 'API Integrations',
   both: 'All',
 };
@@ -11836,18 +11900,25 @@ async function populateMenubarProviderOrder() {
 
   const order = Array.isArray(State.menubarProviderOrder) ? State.menubarProviderOrder : [];
   const indexByKey = new Map(order.map((key, index) => [key, index]));
+  // A saved base key ("omp", "codex") ranks and shows every account row of that
+  // provider until the rows are saved individually, as the server does.
+  const savedIndex = (key) => {
+    if (indexByKey.has(key)) return indexByKey.get(key);
+    const base = String(key).split(':')[0];
+    return indexByKey.has(base) ? indexByKey.get(base) : Number.MAX_SAFE_INTEGER;
+  };
   providers.sort((a, b) => {
-    const left = indexByKey.has(a.key) ? indexByKey.get(a.key) : Number.MAX_SAFE_INTEGER;
-    const right = indexByKey.has(b.key) ? indexByKey.get(b.key) : Number.MAX_SAFE_INTEGER;
+    const left = savedIndex(a.key);
+    const right = savedIndex(b.key);
     if (left !== right) return left - right;
     return a.name.localeCompare(b.name);
   });
   State.menubarProviderOrder = providers.map(provider => provider.key);
 
-  const knownKeys = new Set(providers.map(provider => provider.key));
-  const explicitVisible = Array.isArray(State.menubarVisibleProviders)
-    ? State.menubarVisibleProviders.filter((providerKey) => knownKeys.has(providerKey))
-    : [];
+  const savedVisible = Array.isArray(State.menubarVisibleProviders) ? State.menubarVisibleProviders : [];
+  const explicitVisible = providers
+    .map(provider => provider.key)
+    .filter(key => savedVisible.includes(key) || savedVisible.includes(String(key).split(':')[0]));
   const visibleSet = new Set(explicitVisible);
   const showAll = visibleSet.size === 0;
 
@@ -11856,9 +11927,8 @@ async function populateMenubarProviderOrder() {
     : {};
   list.innerHTML = providers.map(provider => {
     const visible = showAll || visibleSet.has(provider.key);
-    // Prefer dashboard tab rename (base key) so menubar settings match tabs.
-    const baseKey = String(provider.key || '').split(':')[0];
-    const displayName = (tabLabels[baseKey] || tabLabels[provider.key] || provider.name || baseKey);
+    // A dashboard tab rename names provider rows and prefixes account rows.
+    const displayName = menubarOrderDisplayName(provider, tabLabels);
     return `
     <li class="menubar-order-item ${provider.dashboardVisible ? '' : 'is-disabled'} ${visible ? '' : 'is-hidden'}" draggable="true" tabindex="0" data-provider="${provider.key}">
       <div class="menubar-order-handle" aria-hidden="true"><span></span><span></span><span></span></div>
