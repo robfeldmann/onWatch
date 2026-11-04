@@ -63,7 +63,7 @@ The tab has no session history and no cross-limit cycle overview.
 
 ## Menubar
 
-The menubar shows one card per broker account, `OMP - Cursor · me@example.com` (just `OMP` when the broker holds a single account, or the tab name you set in Settings). A card lists the account's limits with the percent, `$used/$limit` for spend limits, and the reset. Accounts without reported limits have no card. Provider order and visibility work like Codex accounts: `omp` covers every account, `omp:<id>` one account, and the tray can show any OMP limit. A card turns stale after 15 minutes without a new broker report, since the broker itself serves 5-minute-old reports.
+The menubar shows one card per broker account, `OMP - Cursor · me@example.com` (just `OMP` when the broker holds a single account, or the tab name you set in Settings). A card lists the account's limits with the percent, `$used/$limit` for spend limits, and the reset. Accounts without reported limits have no card. **Settings -> Menubar -> Provider Order** lists every account on its own row (`OMP · Cursor · me@example.com`, or `<renamed tab> · Cursor · me@example.com` after a dashboard tab rename), so accounts can be dragged and shown or hidden one by one. The dashboard OMP tab (account picker and All accounts) follows the same order; accounts missing from it come after the ordered ones in their usual order, a new account is appended and shown when any OMP account is shown, and a removed one is ignored. In saved settings `omp` covers every account and `omp:<id>` one account. The tray can show any OMP limit. A card turns stale after 15 minutes without a new broker report, since the broker itself serves 5-minute-old reports.
 
 ## Prometheus
 
