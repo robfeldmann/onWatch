@@ -2,7 +2,9 @@ package web
 
 import (
 	"fmt"
+	"math"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -50,6 +52,7 @@ func (h *Handler) ompAccounts(r *http.Request) ([]store.OMPAccount, int, error) 
 		return nil, http.StatusInternalServerError, fmt.Errorf("failed to query accounts")
 	}
 	if accountID == 0 {
+		h.sortOMPAccounts(accounts)
 		return accounts, http.StatusOK, nil
 	}
 	for _, acc := range accounts {
@@ -115,6 +118,7 @@ func (h *Handler) buildOMPCurrent() map[string]interface{} {
 		h.logger.Error("failed to query OMP accounts", "error", err)
 		return response
 	}
+	h.sortOMPAccounts(accounts)
 	latest, err := h.store.QueryLatestOMPSnapshots()
 	if err != nil {
 		h.logger.Error("failed to query latest OMP snapshots", "error", err)
@@ -541,4 +545,33 @@ func (h *Handler) cycleOverviewOMP(w http.ResponseWriter, r *http.Request) {
 		"quotaNames": []string{},
 		"cycles":     []interface{}{},
 	})
+}
+
+// sortOMPAccounts orders accounts by the saved menubar provider order, the
+// one place the user sorts broker accounts (Settings -> Menubar provider
+// order, keys "omp:<id>"), so the dashboard picker, the All accounts view and
+// the menubar agree. Accounts without an entry keep their relative (id) order
+// after the ordered ones, so a new account is appended and a removed one is
+// simply ignored.
+func (h *Handler) sortOMPAccounts(accounts []store.OMPAccount) {
+	if len(accounts) < 2 {
+		return
+	}
+	settings, err := h.menubarSettings()
+	if err != nil || settings == nil || len(settings.ProvidersOrder) == 0 {
+		return
+	}
+	rank := make(map[string]int, len(settings.ProvidersOrder))
+	for i, key := range settings.ProvidersOrder {
+		if _, seen := rank[key]; !seen {
+			rank[key] = i
+		}
+	}
+	position := func(acc store.OMPAccount) int {
+		if i, ok := rank[fmt.Sprintf("omp:%d", acc.ID)]; ok {
+			return i
+		}
+		return math.MaxInt
+	}
+	sort.SliceStable(accounts, func(i, j int) bool { return position(accounts[i]) < position(accounts[j]) })
 }
